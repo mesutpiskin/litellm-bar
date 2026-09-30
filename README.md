@@ -17,7 +17,19 @@ Admin hesabı gerektirmez — kendi **sanal anahtarınız (sk-…)** ya da LiteL
 - Otomatik yenileme, oturum açılışında başlatma, kurumsal/self-signed sertifika desteği
 - Kimlik bilgileri macOS Anahtar Zinciri'nde saklanır
 
-## Kurulum
+## VS Code eklentisi
+
+Masaüstü uygulaması kurulamıyorsa (ör. imzasız uygulama politikaları) aynı özellikler VS Code eklentisi olarak da var: durum çubuğunda bugünkü harcama, tıklayınca kullanım paneli.
+
+[Releases](https://github.com/mesutpiskin/litellm-bar/releases) sayfasından `litellm-usage-*.vsix` indirip:
+
+```bash
+code --install-extension litellm-usage-<sürüm>.vsix
+```
+
+Detaylar: [vscode/README.md](vscode/README.md)
+
+## Kurulum (macOS uygulaması)
 
 ```bash
 brew tap mesutpiskin/litellm-bar https://github.com/mesutpiskin/litellm-bar
@@ -63,4 +75,4 @@ swift build && swift run            # geliştirme
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-`Release` workflow'u universal `.app` üretir, GitHub Release'e zip olarak yükler ve `Casks/litellm-bar.rb` dosyasını yeni sürüm/sha256 ile günceller.
+`Release` workflow'u universal `.app` ve VS Code `.vsix` üretir, GitHub Release'e zip olarak yükler ve `Casks/litellm-bar.rb` dosyasını yeni sürüm/sha256 ile günceller.
