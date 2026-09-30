@@ -1,6 +1,4 @@
-.build/
-build/
-.swiftpm/
-*.xcodeproj
-xcuserdata/
+out/
+node_modules/
+*.vsix
 .DS_Store

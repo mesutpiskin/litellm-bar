@@ -126,48 +126,48 @@ class UsageController implements vscode.Disposable {
 
   async login() {
     const baseUrl = await vscode.window.showInputBox({
-      title: 'LiteLLM sunucu adresi',
-      prompt: 'ör. https://litellm.sirket.com',
+      title: 'LiteLLM proxy URL',
+      prompt: 'e.g. https://litellm.example.com',
       value: this.config.get<string>('baseUrl') ?? '',
       ignoreFocusOut: true,
-      validateInput: v => LiteLLMClient.normalize(v) ? undefined : 'Geçersiz adres',
+      validateInput: v => LiteLLMClient.normalize(v) ? undefined : 'Invalid URL',
     });
     if (!baseUrl) { return; }
     const base = LiteLLMClient.normalize(baseUrl)!;
 
     const pick = await vscode.window.showQuickPick([
-      { label: '$(key) API Anahtarı', description: 'Sanal anahtar (sk-…)', mode: 'apiKey' as AuthMode },
-      { label: '$(account) Kullanıcı Adı / Şifre', description: 'LiteLLM UI girişi', mode: 'password' as AuthMode },
-    ], { title: 'Giriş türü', ignoreFocusOut: true });
+      { label: '$(key) API Key', description: 'Virtual key (sk-…)', mode: 'apiKey' as AuthMode },
+      { label: '$(account) Username / Password', description: 'LiteLLM UI credentials', mode: 'password' as AuthMode },
+    ], { title: 'Sign-in method', ignoreFocusOut: true });
     if (!pick) { return; }
 
     const insecure = this.config.get<boolean>('allowInsecureTLS', false);
     try {
       if (pick.mode === 'apiKey') {
         const key = (await vscode.window.showInputBox({
-          title: 'LiteLLM sanal anahtarı', prompt: 'sk-...', password: true, ignoreFocusOut: true,
+          title: 'LiteLLM virtual key', prompt: 'sk-...', password: true, ignoreFocusOut: true,
         }))?.trim();
         if (!key) { return; }
-        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LiteLLM: doğrulanıyor…' },
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LiteLLM: verifying key…' },
           () => new LiteLLMClient(base, key, insecure).keyInfo());
         await this.context.secrets.store(SECRET_API_KEY, key);
       } else {
         const username = await vscode.window.showInputBox({
-          title: 'Kullanıcı adı / e-posta', value: this.username, ignoreFocusOut: true,
+          title: 'Username / email', value: this.username, ignoreFocusOut: true,
         });
         if (!username) { return; }
-        const password = await vscode.window.showInputBox({ title: 'Şifre', password: true, ignoreFocusOut: true });
+        const password = await vscode.window.showInputBox({ title: 'Password', password: true, ignoreFocusOut: true });
         if (!password) { return; }
         const session = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: 'LiteLLM: giriş yapılıyor…' },
+          { location: vscode.ProgressLocation.Notification, title: 'LiteLLM: signing in…' },
           () => new LiteLLMClient(base, undefined, insecure).login(username, password));
-        const remember = await vscode.window.showQuickPick(['Evet', 'Hayır'], {
-          title: 'Oturum süresi dolunca otomatik yenilemek için şifre güvenli depoda saklansın mı?',
+        const remember = await vscode.window.showQuickPick(['Yes', 'No'], {
+          title: 'Store the password in secure storage to renew the session automatically when it expires?',
           ignoreFocusOut: true,
         });
         await this.context.globalState.update('username', username);
         await this.context.secrets.store(SECRET_SESSION_KEY, session.key);
-        if (remember === 'Evet') {
+        if (remember === 'Yes') {
           await this.context.secrets.store(SECRET_PASSWORD, password);
         } else {
           await this.context.secrets.delete(SECRET_PASSWORD);
@@ -176,7 +176,7 @@ class UsageController implements vscode.Disposable {
       await this.context.globalState.update('authMode', pick.mode);
       await this.config.update('baseUrl', base.toString().replace(/\/$/, ''), vscode.ConfigurationTarget.Global);
       await this.refresh();
-      vscode.window.showInformationMessage('LiteLLM: giriş başarılı.');
+      vscode.window.showInformationMessage('LiteLLM: signed in.');
     } catch (e) {
       vscode.window.showErrorMessage(`LiteLLM: ${(e as Error).message}`);
     }
@@ -271,8 +271,8 @@ class UsageController implements vscode.Disposable {
     const s = this.state;
     const item = this.statusItem;
     if (!s.configured) {
-      item.text = '$(pulse) LiteLLM: Giriş yap';
-      item.tooltip = 'LiteLLM kullanımını görmek için giriş yapın';
+      item.text = '$(pulse) LiteLLM: Sign in';
+      item.tooltip = 'Sign in to see your LiteLLM usage';
       item.command = 'litellm.login';
     } else {
       item.command = 'litellm.showDashboard';
@@ -287,11 +287,11 @@ class UsageController implements vscode.Disposable {
       const tip = new vscode.MarkdownString(undefined, true);
       tip.appendMarkdown(`**LiteLLM** · ${s.host}\n\n`);
       if (s.error) { tip.appendMarkdown(`$(warning) ${s.error}\n\n`); }
-      tip.appendMarkdown(`Bugün: **${money(s.today.spend)}** · ${tokens(s.today.total_tokens)} token · ${s.today.api_requests} istek\n\n`);
-      tip.appendMarkdown(`Toplam harcama: **${money(s.userInfo?.user_info?.spend ?? s.keyInfo?.spend ?? 0)}**`);
+      tip.appendMarkdown(`Today: **${money(s.today.spend)}** · ${tokens(s.today.total_tokens)} tokens · ${s.today.api_requests} requests\n\n`);
+      tip.appendMarkdown(`Total spend: **${money(s.userInfo?.user_info?.spend ?? s.keyInfo?.spend ?? 0)}**`);
       const budget = s.keyInfo?.max_budget ?? s.userInfo?.user_info?.max_budget;
       if (budget) { tip.appendMarkdown(` / ${money(budget)}`); }
-      tip.appendMarkdown('\n\n_Panel için tıklayın_');
+      tip.appendMarkdown('\n\n_Click to open the dashboard_');
       item.tooltip = tip;
     }
     DashboardPanel.update(s);

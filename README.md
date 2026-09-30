@@ -1,78 +1,93 @@
-# LiteLLM Bar
+# LiteLLM Usage for VS Code
 
-macOS menü çubuğunda (sağ üst) duran, [LiteLLM](https://github.com/BerriAI/litellm) proxy'nizdeki **model, token ve harcama** kullanımınızı gösteren hafif, native (SwiftUI) bir uygulama.
+[![CI](https://github.com/mesutpiskin/litellm-usage/actions/workflows/ci.yml/badge.svg)](https://github.com/mesutpiskin/litellm-usage/actions/workflows/ci.yml)
+[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/mesutpiskin.litellm-usage?label=marketplace)](https://marketplace.visualstudio.com/items?itemName=mesutpiskin.litellm-usage)
+[![Open VSX](https://img.shields.io/open-vsx/v/mesutpiskin/litellm-usage?label=open%20vsx)](https://open-vsx.org/extension/mesutpiskin/litellm-usage)
 
-Admin hesabı gerektirmez — kendi **sanal anahtarınız (sk-…)** ya da LiteLLM UI **kullanıcı adı/şifreniz** yeterlidir.
+Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, token and model usage without leaving your editor.
 
-## Özellikler
+**No admin account required** — sign in with your own virtual key (`sk-…`) or your LiteLLM UI username and password.
 
-- Menü çubuğunda bugünkü harcama / token / toplam harcama (seçilebilir)
-- Toplam harcama, bütçe ve bütçe sıfırlanma tarihi, RPM/TPM limitleri
-- Bugün / 7 / 30 / 90 günlük aralıkta: harcama, toplam token, girdi/çıktı token, istek & hata sayısı
-- Günlük grafik (harcama / token / istek)
-- Model bazlı kırılım (harcama, token, istek)
-- Kullanıcıya ait tüm anahtarlar ve harcamaları
-- Erişilebilir model listesi
-- Kullanıcı geneli veya yalnızca aktif anahtar kapsamı
-- Otomatik yenileme, oturum açılışında başlatma, kurumsal/self-signed sertifika desteği
-- Kimlik bilgileri macOS Anahtar Zinciri'nde saklanır
+## Features
 
-## VS Code eklentisi
+- **Status bar** — today's spend (or today's tokens / total spend) at a glance, with a quick summary on hover.
+- **Usage dashboard**
+  - Total spend vs. budget, budget reset date, RPM / TPM limits
+  - Spend, total tokens, input / output tokens, requests and failures for today, 7, 30 or 90 days
+  - Daily chart (spend, tokens or requests)
+  - Per-model breakdown
+  - All keys that belong to you and their spend
+  - Models available to your key
+- **Scope switch** — usage across all your keys, or just the key you signed in with.
+- **Secure** — credentials are kept in VS Code SecretStorage (macOS Keychain, Windows Credential Manager, libsecret on Linux).
+- **Enterprise friendly** — honours VS Code proxy settings and can trust self-signed certificates.
 
-Masaüstü uygulaması kurulamıyorsa (ör. imzasız uygulama politikaları) aynı özellikler VS Code eklentisi olarak da var: durum çubuğunda bugünkü harcama, tıklayınca kullanım paneli.
+## Getting started
 
-[Releases](https://github.com/mesutpiskin/litellm-bar/releases) sayfasından `litellm-usage-*.vsix` indirip:
+1. Install **LiteLLM Usage** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=mesutpiskin.litellm-usage) or [Open VSX](https://open-vsx.org/extension/mesutpiskin/litellm-usage) (Cursor, VSCodium, Windsurf…).
+2. Click **LiteLLM: Sign in** in the status bar, or run `LiteLLM: Sign In` from the Command Palette.
+3. Enter your proxy URL (e.g. `https://litellm.example.com`) and choose a sign-in method:
+   - **API Key** — a virtual key created in the LiteLLM UI under *Virtual Keys*.
+   - **Username / Password** — your LiteLLM UI credentials. If you choose to store the password, the session is renewed automatically when it expires. SSO logins are not supported; use an API key instead.
+4. Click the status bar item to open the dashboard.
 
-```bash
-code --install-extension litellm-usage-<sürüm>.vsix
-```
+## Commands
 
-Detaylar: [vscode/README.md](vscode/README.md)
-
-## Kurulum (macOS uygulaması)
-
-```bash
-brew tap mesutpiskin/litellm-bar https://github.com/mesutpiskin/litellm-bar
-brew trust mesutpiskin/litellm-bar   # Homebrew 7+: üçüncü parti tap onayı
-brew install --cask litellm-bar
-```
-
-Güncelleme: `brew upgrade --cask litellm-bar`
-
-> Uygulama Apple Developer ID ile imzalanmadığı için (ad-hoc imza) cask kurulumda karantina bayrağını kaldırır.
-> Zip'i elle indirdiyseniz: `xattr -dr com.apple.quarantine /Applications/LiteLLMBar.app`
-
-## Kullanım
-
-1. Menü çubuğundaki gösterge ikonuna tıklayın.
-2. Sunucu adresini girin (ör. `https://litellm.sirket.com` — sonundaki `/ui` otomatik atılır).
-3. **API Anahtarı** sekmesinde sanal anahtarınızı ya da **Kullanıcı Adı / Şifre** sekmesinde LiteLLM UI bilgilerinizi girin.
-
-### Kullanılan LiteLLM uç noktaları
-
-| Uç nokta | Amaç |
+| Command | Description |
 |---|---|
-| `GET /key/info` | Anahtar harcaması, bütçe, limitler |
-| `GET /user/info` | Kullanıcı harcaması ve anahtar listesi |
-| `GET /user/daily/activity` | Günlük / model bazlı token & harcama |
-| `GET /v1/models` | Erişilebilir modeller |
-| `POST /login`, `POST /v2/login` | UI kullanıcı adı/şifre girişi (oturum anahtarı JWT'den alınır) |
+| `LiteLLM: Show Usage Dashboard` | Open the dashboard |
+| `LiteLLM: Sign In` | Sign in or switch account |
+| `LiteLLM: Sign Out` | Remove stored credentials |
+| `LiteLLM: Refresh` | Refresh now |
 
-Günlük kırılım için LiteLLM'in `/user/daily/activity` destekleyen bir sürümde olması gerekir; eski sürümlerde yalnızca toplam harcama gösterilir.
+## Settings
 
-## Geliştirme
+| Setting | Default | Description |
+|---|---|---|
+| `litellm.baseUrl` | `""` | Base URL of your LiteLLM proxy |
+| `litellm.refreshMinutes` | `5` | Auto-refresh interval in minutes |
+| `litellm.statusBar` | `todaySpend` | `todaySpend`, `todayTokens`, `totalSpend` or `icon` |
+| `litellm.allowInsecureTLS` | `false` | Accept self-signed / untrusted certificates |
 
-Xcode gerekmez, Command Line Tools yeterli:
+## LiteLLM endpoints used
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /key/info` | Key spend, budget and limits |
+| `GET /user/info` | User spend and list of keys |
+| `GET /user/daily/activity` | Daily and per-model tokens and spend |
+| `GET /v1/models` | Models available to the key |
+| `POST /login`, `POST /v2/login` | Username / password sign-in |
+
+Daily and per-model breakdowns need a LiteLLM version that exposes `/user/daily/activity`. On older versions only total spend is shown.
+
+## Development
 
 ```bash
-swift build && swift run            # geliştirme
-./scripts/build-app.sh 0.1.0        # universal build/LiteLLMBar.app
+npm install
+npm test          # compile + unit tests against a mock LiteLLM server
+npm run package   # build a .vsix
 ```
 
-## Sürüm yayınlama
+Press <kbd>F5</kbd> in VS Code to launch an Extension Development Host.
 
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
+## Releasing
 
-`Release` workflow'u universal `.app` ve VS Code `.vsix` üretir, GitHub Release'e zip olarak yükler ve `Casks/litellm-bar.rb` dosyasını yeni sürüm/sha256 ile günceller.
+1. Bump `version` in `package.json` and add an entry to `CHANGELOG.md`.
+2. Tag and push:
+   ```bash
+   git tag v0.3.0 && git push origin v0.3.0
+   ```
+
+The **Release** workflow runs the tests, packages the `.vsix`, attaches it to a GitHub Release and publishes it to the Visual Studio Marketplace and Open VSX.
+
+Required repository secrets:
+
+| Secret | Where to get it |
+|---|---|
+| `VSCE_PAT` | Azure DevOps personal access token with the **Marketplace › Manage** scope, for publisher `mesutpiskin` ([guide](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#get-a-personal-access-token)) |
+| `OVSX_PAT` | Access token from [open-vsx.org](https://open-vsx.org/user-settings/tokens) (optional — Open VSX is skipped when missing) |
+
+## License
+
+[MIT](LICENSE)

@@ -28,7 +28,7 @@ export class DashboardPanel {
   }
 
   private constructor(extensionUri: vscode.Uri, private readonly host: DashboardHost) {
-    this.panel = vscode.window.createWebviewPanel('litellmUsage', 'LiteLLM Kullanım', vscode.ViewColumn.Active, {
+    this.panel = vscode.window.createWebviewPanel('litellmUsage', 'LiteLLM Usage', vscode.ViewColumn.Active, {
       enableScripts: true,
       retainContextWhenHidden: true,
       localResourceRoots: [extensionUri],
@@ -53,7 +53,7 @@ export class DashboardPanel {
 
 function html(nonce: string, cspSource: string): string {
   return /* html */ `<!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
@@ -90,7 +90,7 @@ function html(nonce: string, cspSource: string): string {
 </style>
 </head>
 <body>
-<div id="root" class="muted">Yükleniyor…</div>
+<div id="root" class="muted">Loading…</div>
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 let chartMetric = 'spend';
@@ -98,9 +98,9 @@ let state;
 
 const money = v => !v ? '$0' : v < 0.01 ? '$' + v.toFixed(4) : v < 100 ? '$' + v.toFixed(2) : '$' + v.toFixed(0);
 const tokens = v => v >= 1e9 ? (v/1e9).toFixed(1)+'B' : v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'K' : String(v);
-const num = v => (v ?? 0).toLocaleString('tr-TR');
+const num = v => (v ?? 0).toLocaleString();
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fmtDate = iso => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? esc(iso) : d.toLocaleString('tr-TR'); };
+const fmtDate = iso => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? esc(iso) : d.toLocaleString(); };
 
 window.addEventListener('message', e => { if (e.data?.type === 'state') { state = e.data.state; render(); } });
 document.addEventListener('click', e => {
@@ -127,7 +127,7 @@ function chart(days) {
   }).join('');
   const axis = '<text x="0" y="12">' + fmt(max) + '</text><text x="0" y="' + (H - 18) + '">0</text>';
   const btn = (k, l) => '<button data-action="chart" data-value="' + k + '" class="' + (chartMetric === k ? 'active' : '') + '">' + l + '</button>';
-  return '<h2 class="row">Günlük <span class="spacer"></span>' + btn('spend','Harcama') + btn('tokens','Token') + btn('requests','İstek') + '</h2>'
+  return '<h2 class="row">Daily <span class="spacer"></span>' + btn('spend','Spend') + btn('tokens','Tokens') + btn('requests','Requests') + '</h2>'
     + '<div class="card"><svg viewBox="0 0 ' + W + ' ' + H + '" width="100%">' + axis + bars + '</svg></div>';
 }
 
@@ -135,8 +135,8 @@ function render() {
   const root = document.getElementById('root');
   const s = state;
   if (!s.configured) {
-    root.innerHTML = '<h1>LiteLLM Kullanım</h1><p class="muted">Model ve token kullanımınızı görmek için giriş yapın.</p>'
-      + '<button class="primary" data-action="login">Giriş Yap</button>';
+    root.innerHTML = '<h1>LiteLLM Usage</h1><p class="muted">Sign in to see your spend, token and model usage.</p>'
+      + '<button class="primary" data-action="login">Sign In</button>';
     root.classList.remove('muted');
     return;
   }
@@ -150,38 +150,38 @@ function render() {
   const scopeBtn = (v, l) => '<button data-action="scope" data-value="' + v + '" class="' + (s.scope === v ? 'active' : '') + '">' + l + '</button>';
 
   let h = '<div class="row"><h1>' + esc(ki.key_alias || ui?.user_email || 'LiteLLM') + '</h1><span class="muted">' + esc(s.host) + '</span>'
-    + '<span class="spacer"></span>' + (s.loading ? '<span class="muted">Yenileniyor…</span>' : '')
-    + '<button data-action="refresh">Yenile</button><button data-action="login">Hesabı değiştir</button><button data-action="logout">Çıkış</button></div>';
+    + '<span class="spacer"></span>' + (s.loading ? '<span class="muted">Refreshing…</span>' : '')
+    + '<button data-action="refresh">Refresh</button><button data-action="login">Switch account</button><button data-action="logout">Sign out</button></div>';
   if (s.error) h += '<div class="error">⚠ ' + esc(s.error) + '</div>';
 
-  h += '<h2>Bütçe</h2><div class="card"><div class="row"><span class="big">' + money(spend) + '</span>'
-    + (budget ? '<span class="muted">/ ' + money(budget) + '</span>' : '<span class="muted">bütçe limiti yok</span>')
+  h += '<h2>Budget</h2><div class="card"><div class="row"><span class="big">' + money(spend) + '</span>'
+    + (budget ? '<span class="muted">/ ' + money(budget) + '</span>' : '<span class="muted">no budget limit</span>')
     + '<span class="spacer"></span>'
     + (ki.rpm_limit ? '<span class="muted">RPM ' + num(ki.rpm_limit) + '</span>' : '')
     + (ki.tpm_limit ? '<span class="muted">TPM ' + tokens(ki.tpm_limit) + '</span>' : '') + '</div>';
   if (budget) h += '<div class="bar" style="margin-top:8px"><div style="width:' + Math.min(100, spend / budget * 100).toFixed(1) + '%"></div></div>';
-  if (reset) h += '<div class="muted" style="margin-top:6px">Sıfırlanma: ' + fmtDate(reset) + '</div>';
+  if (reset) h += '<div class="muted" style="margin-top:6px">Resets: ' + fmtDate(reset) + '</div>';
   h += '</div>';
 
-  h += '<h2 class="row">Kullanım <span class="spacer"></span>' + rangeBtn(1,'Bugün') + rangeBtn(7,'7 gün') + rangeBtn(30,'30 gün') + rangeBtn(90,'90 gün')
-    + '<span style="width:12px"></span>' + scopeBtn('user','Kullanıcı') + scopeBtn('key','Bu anahtar') + '</h2>';
+  h += '<h2 class="row">Usage <span class="spacer"></span>' + rangeBtn(1,'Today') + rangeBtn(7,'7 days') + rangeBtn(30,'30 days') + rangeBtn(90,'90 days')
+    + '<span style="width:12px"></span>' + scopeBtn('user','All my keys') + scopeBtn('key','This key') + '</h2>';
   h += '<div class="grid">'
-    + '<div class="card"><div class="muted">Harcama</div><div class="big">' + money(t.spend) + '</div></div>'
-    + '<div class="card"><div class="muted">Toplam token</div><div class="big">' + tokens(t.total_tokens) + '</div></div>'
-    + '<div class="card"><div class="muted">Girdi / Çıktı</div><div class="big">' + tokens(t.prompt_tokens) + ' / ' + tokens(t.completion_tokens) + '</div></div>'
-    + '<div class="card"><div class="muted">İstek</div><div class="big">' + num(t.api_requests) + '</div>'
-    + (t.failed_requests ? '<div class="error" style="margin:0">' + num(t.failed_requests) + ' başarısız</div>' : '') + '</div></div>';
+    + '<div class="card"><div class="muted">Spend</div><div class="big">' + money(t.spend) + '</div></div>'
+    + '<div class="card"><div class="muted">Total tokens</div><div class="big">' + tokens(t.total_tokens) + '</div></div>'
+    + '<div class="card"><div class="muted">Input / Output</div><div class="big">' + tokens(t.prompt_tokens) + ' / ' + tokens(t.completion_tokens) + '</div></div>'
+    + '<div class="card"><div class="muted">Requests</div><div class="big">' + num(t.api_requests) + '</div>'
+    + (t.failed_requests ? '<div class="error" style="margin:0">' + num(t.failed_requests) + ' failed</div>' : '') + '</div></div>';
 
   if (s.activityUnsupported) {
-    h += '<p class="muted">Bu LiteLLM sürümü /user/daily/activity uç noktasını desteklemiyor; günlük ve model bazlı kırılım gösterilemiyor.</p>';
+    h += '<p class="muted">This LiteLLM version does not support /user/daily/activity, so daily and per-model breakdowns are unavailable.</p>';
   } else {
     h += chart(s.days);
-    h += '<h2>Modeller</h2>';
+    h += '<h2>Models</h2>';
     if (!s.modelUsage.length) {
-      h += '<p class="muted">Bu aralıkta kullanım yok.</p>';
+      h += '<p class="muted">No usage in this period.</p>';
     } else {
       const maxSpend = Math.max(...s.modelUsage.map(m => m.metrics.spend), 1e-9);
-      h += '<table><tr><th>Model</th><th>Harcama</th><th>Token</th><th>Girdi</th><th>Çıktı</th><th>İstek</th><th style="width:22%"></th></tr>'
+      h += '<table><tr><th>Model</th><th>Spend</th><th>Tokens</th><th>Input</th><th>Output</th><th>Requests</th><th style="width:22%"></th></tr>'
         + s.modelUsage.map(m => '<tr><td><code>' + esc(m.name) + '</code></td><td>' + money(m.metrics.spend) + '</td><td>' + tokens(m.metrics.total_tokens)
           + '</td><td>' + tokens(m.metrics.prompt_tokens) + '</td><td>' + tokens(m.metrics.completion_tokens) + '</td><td>' + num(m.metrics.api_requests)
           + '</td><td><div class="bar"><div style="width:' + (m.metrics.spend / maxSpend * 100).toFixed(1) + '%"></div></div></td></tr>').join('')
@@ -191,14 +191,14 @@ function render() {
 
   const keys = s.userInfo?.keys ?? [];
   if (keys.length > 1) {
-    h += '<h2>Anahtarlarım</h2><table><tr><th>Anahtar</th><th>Harcama</th><th>Bütçe</th></tr>'
-      + [...keys].sort((a, b) => (b.spend ?? 0) - (a.spend ?? 0)).map(k => '<tr><td>' + esc(k.key_alias || k.key_name || 'İsimsiz')
+    h += '<h2>My keys</h2><table><tr><th>Key</th><th>Spend</th><th>Budget</th></tr>'
+      + [...keys].sort((a, b) => (b.spend ?? 0) - (a.spend ?? 0)).map(k => '<tr><td>' + esc(k.key_alias || k.key_name || 'Unnamed')
         + '</td><td>' + money(k.spend ?? 0) + '</td><td>' + (k.max_budget ? money(k.max_budget) : '—') + '</td></tr>').join('') + '</table>';
   }
   if (s.models.length) {
-    h += '<h2>Erişilebilir modeller (' + s.models.length + ')</h2><div class="chips">' + s.models.map(m => '<code>' + esc(m) + '</code>').join('') + '</div>';
+    h += '<h2>Available models (' + s.models.length + ')</h2><div class="chips">' + s.models.map(m => '<code>' + esc(m) + '</code>').join('') + '</div>';
   }
-  if (s.lastUpdated) h += '<p class="muted" style="margin-top:20px">Son güncelleme: ' + fmtDate(s.lastUpdated) + '</p>';
+  if (s.lastUpdated) h += '<p class="muted" style="margin-top:20px">Last updated: ' + fmtDate(s.lastUpdated) + '</p>';
   root.innerHTML = h;
 }
 </script>

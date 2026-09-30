@@ -144,7 +144,7 @@ export class LiteLLMClient {
     const t2 = extractToken(r2);
     if (t2) { return decodeSession(t2); }
     if (r2.status >= 400) { throw new ApiError(r2.status, errorMessage(r2)); }
-    throw new Error('Giriş başarılı görünüyor ama oturum anahtarı alınamadı. SSO kullanılıyorsa API anahtarı ile giriş yapın.');
+    throw new Error('Login succeeded but no session key was returned. If your proxy uses SSO, sign in with an API key instead.');
   }
 
   private async get<T>(path: string, query?: Record<string, string>): Promise<T> {
@@ -153,7 +153,7 @@ export class LiteLLMClient {
     try {
       return JSON.parse(res.body) as T;
     } catch {
-      throw new Error(`${path}: yanıt JSON değil`);
+      throw new Error(`${path}: response is not valid JSON`);
     }
   }
 
@@ -182,7 +182,7 @@ export class LiteLLMClient {
           body: Buffer.concat(chunks).toString('utf8'),
         }));
       });
-      req.on('timeout', () => req.destroy(new Error('İstek zaman aşımına uğradı')));
+      req.on('timeout', () => req.destroy(new Error('Request timed out')));
       req.on('error', reject);
       if (body !== undefined) { req.write(body); }
       req.end();
@@ -206,7 +206,7 @@ function extractToken(res: RawResponse): string | undefined {
 
 function decodeSession(jwt: string): SessionInfo {
   const payload = JSON.parse(Buffer.from(jwt.split('.')[1] ?? '', 'base64url').toString('utf8'));
-  if (typeof payload.key !== 'string') { throw new Error('Oturum anahtarı JWT içinde bulunamadı.'); }
+  if (typeof payload.key !== 'string') { throw new Error('Session key not found in login token.'); }
   return { key: payload.key, userId: payload.user_id, userEmail: payload.user_email };
 }
 
@@ -217,7 +217,7 @@ function errorMessage(res: RawResponse): string {
     msg = j?.error?.message ?? (typeof j?.detail === 'string' ? j.detail : j?.detail?.error) ?? msg;
   } catch { /* keep raw body */ }
   if (res.status === 401 || res.status === 403) {
-    return `Yetkisiz (${res.status}). Anahtar/oturum geçersiz ya da süresi dolmuş olabilir. ${msg}`;
+    return `Unauthorized (${res.status}). Your key or session may be invalid or expired. ${msg}`;
   }
-  return `Sunucu hatası (${res.status}): ${msg}`;
+  return `Server error (${res.status}): ${msg}`;
 }
