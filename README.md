@@ -81,12 +81,17 @@ Press <kbd>F5</kbd> in VS Code to launch an Extension Development Host.
 
 The **Release** workflow runs the tests, packages the `.vsix`, attaches it to a GitHub Release and publishes it to the Visual Studio Marketplace and Open VSX.
 
-Required repository secrets:
+### Marketplace credentials
 
-| Secret | Where to get it |
+Pick one (the workflow uses the first one it finds):
+
+| Method | Configuration |
 |---|---|
-| `VSCE_PAT` | Azure DevOps personal access token with the **Marketplace › Manage** scope, for publisher `mesutpiskin` ([guide](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#get-a-personal-access-token)) |
-| `OVSX_PAT` | Access token from [open-vsx.org](https://open-vsx.org/user-settings/tokens) (optional — Open VSX is skipped when missing) |
+| **Microsoft Entra ID (recommended)** | Repository variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` of an app registration with a GitHub federated credential, added as a member of the `mesutpiskin` publisher. See [Publishing extensions](https://code.visualstudio.com/api/working-with-extensions/publishing-extension). |
+| Global PAT (legacy) | Secret `VSCE_PAT` — an Azure DevOps PAT for *All accessible organizations* with the **Marketplace › Manage** scope. Azure DevOps retires global PATs on **2026-12-01**. |
+| Manual | No credentials: download the `.vsix` from the GitHub Release and upload it at [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage). |
+
+Open VSX uses the `OVSX_PAT` secret from [open-vsx.org](https://open-vsx.org/user-settings/tokens) and is skipped when it is missing.
 
 ## License
 

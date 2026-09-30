@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # Entra ID (OIDC) sign-in for Marketplace publishing
 
 concurrency:
   group: release
@@ -49,15 +50,29 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$VSIX" \
             --title "LiteLLM Usage $VERSION" --generate-notes
 
+      # Preferred: Microsoft Entra ID via OIDC (no long-lived secret). Enabled when the
+      # AZURE_CLIENT_ID and AZURE_TENANT_ID repository variables are set.
+      - name: Azure login (Entra ID)
+        if: vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
       - name: Publish to Visual Studio Marketplace
         env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          if [ -z "$VSCE_PAT" ]; then
-            echo "::error::VSCE_PAT secret is not set — cannot publish to the Visual Studio Marketplace"
-            exit 1
+          if [ -n "$AZURE_CLIENT_ID" ]; then
+            npx vsce publish --no-dependencies --azure-credential --packagePath "$VSIX"
+          elif [ -n "$VSCE_PAT" ]; then
+            # Legacy global PAT — Azure DevOps retires these on 2026-12-01.
+            npx vsce publish --no-dependencies --packagePath "$VSIX"
+          else
+            echo "::warning::No Marketplace credentials configured — upload $VSIX manually at https://marketplace.visualstudio.com/manage"
           fi
-          npx vsce publish --no-dependencies --packagePath "$VSIX"
 
       - name: Publish to Open VSX
         env:
