@@ -9,49 +9,68 @@ export interface DashboardHost {
   setScope(scope: Scope): Promise<void>;
   login(): Promise<void>;
   logout(): Promise<void>;
+  showDashboard(): void;
 }
 
+/** Every live webview (editor panel + sidebar view) that renders usage state. */
+const webviews = new Set<vscode.Webview>();
+
+export function broadcast(state: UsageState) {
+  for (const w of webviews) { void w.postMessage({ type: 'state', state }); }
+}
+
+function attach(webview: vscode.Webview, host: DashboardHost, compact: boolean): vscode.Disposable {
+  webview.html = html(crypto.randomBytes(16).toString('hex'), webview.cspSource, compact);
+  webviews.add(webview);
+  const sub = webview.onDidReceiveMessage(msg => {
+    switch (msg?.type) {
+      case 'ready': void webview.postMessage({ type: 'state', state: host.state }); break;
+      case 'refresh': void host.refresh(); break;
+      case 'range': void host.setRange(msg.value); break;
+      case 'scope': void host.setScope(msg.value); break;
+      case 'login': void host.login(); break;
+      case 'logout': void host.logout(); break;
+      case 'open': host.showDashboard(); break;
+    }
+  });
+  return new vscode.Disposable(() => { webviews.delete(webview); sub.dispose(); });
+}
+
+/** Full dashboard in an editor tab. */
 export class DashboardPanel {
-  private static current?: DashboardPanel;
+  private static current?: vscode.WebviewPanel;
 
   static show(extensionUri: vscode.Uri, host: DashboardHost) {
     if (DashboardPanel.current) {
-      DashboardPanel.current.panel.reveal();
-    } else {
-      DashboardPanel.current = new DashboardPanel(extensionUri, host);
+      DashboardPanel.current.reveal();
+      return;
     }
-    DashboardPanel.update(host.state);
-  }
-
-  static update(state: UsageState) {
-    void DashboardPanel.current?.panel.webview.postMessage({ type: 'state', state });
-  }
-
-  private constructor(extensionUri: vscode.Uri, private readonly host: DashboardHost) {
-    this.panel = vscode.window.createWebviewPanel('litellmUsage', 'LiteLLM Usage', vscode.ViewColumn.Active, {
+    const panel = vscode.window.createWebviewPanel('litellmUsage', 'LiteLLM Usage', vscode.ViewColumn.Active, {
       enableScripts: true,
       retainContextWhenHidden: true,
       localResourceRoots: [extensionUri],
     });
-    this.panel.iconPath = vscode.Uri.joinPath(extensionUri, 'media', 'icon.png');
-    this.panel.webview.html = html(crypto.randomBytes(16).toString('hex'), this.panel.webview.cspSource);
-    this.panel.onDidDispose(() => { DashboardPanel.current = undefined; });
-    this.panel.webview.onDidReceiveMessage(msg => {
-      switch (msg?.type) {
-        case 'ready': DashboardPanel.update(this.host.state); break;
-        case 'refresh': void this.host.refresh(); break;
-        case 'range': void this.host.setRange(msg.value); break;
-        case 'scope': void this.host.setScope(msg.value); break;
-        case 'login': void this.host.login(); break;
-        case 'logout': void this.host.logout(); break;
-      }
-    });
+    panel.iconPath = vscode.Uri.joinPath(extensionUri, 'media', 'icon.png');
+    const binding = attach(panel.webview, host, false);
+    panel.onDidDispose(() => { binding.dispose(); DashboardPanel.current = undefined; });
+    DashboardPanel.current = panel;
   }
-
-  private readonly panel: vscode.WebviewPanel;
 }
 
-function html(nonce: string, cspSource: string): string {
+/** Compact usage view in the LiteLLM activity bar container. */
+export class UsageViewProvider implements vscode.WebviewViewProvider {
+  static readonly viewType = 'litellm.usageView';
+
+  constructor(private readonly host: DashboardHost) {}
+
+  resolveWebviewView(view: vscode.WebviewView) {
+    view.webview.options = { enableScripts: true };
+    const binding = attach(view.webview, this.host, true);
+    view.onDidDispose(() => binding.dispose());
+  }
+}
+
+function html(nonce: string, cspSource: string, compact: boolean): string {
   return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -87,13 +106,25 @@ function html(nonce: string, cspSource: string): string {
   code { font-family: var(--vscode-editor-font-family); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chips code { background: var(--vscode-textCodeBlock-background); padding: 2px 6px; border-radius: 3px; }
+  body.compact { padding: 4px 12px 16px; }
+  body.compact h1 { font-size: 1.1em; }
+  body.compact h2 { margin: 16px 0 6px; }
+  body.compact .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  body.compact .card { padding: 8px; }
+  body.compact .big { font-size: 1.2em; }
+  body.compact button { padding: 3px 7px; }
+  .model { margin-bottom: 8px; }
+  .model .row { gap: 4px; }
+  .model code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  .full { width: 100%; margin-top: 16px; }
 </style>
 </head>
-<body>
+<body class="${compact ? 'compact' : ''}">
 <div id="root" class="muted">Loading…</div>
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 let chartMetric = 'spend';
+const compact = document.body.classList.contains('compact');
 let state;
 
 const money = v => !v ? '$0' : v < 0.01 ? '$' + v.toFixed(4) : v < 100 ? '$' + v.toFixed(2) : '$' + v.toFixed(0);
@@ -115,12 +146,13 @@ function chart(days) {
   if (days.length < 2) return '';
   const val = m => chartMetric === 'spend' ? m.spend : chartMetric === 'tokens' ? m.total_tokens : m.api_requests;
   const fmt = chartMetric === 'spend' ? money : tokens;
-  const W = 900, H = 160, pad = 40, max = Math.max(...days.map(d => val(d.metrics)), 1e-9);
+  const W = compact ? 320 : 900, H = compact ? 130 : 160, pad = compact ? 34 : 40, max = Math.max(...days.map(d => val(d.metrics)), 1e-9);
   const bw = (W - pad) / days.length;
   const bars = days.map((d, i) => {
     const h = (val(d.metrics) / max) * (H - 30);
     const x = pad + i * bw;
-    const label = days.length <= 31 || i % Math.ceil(days.length / 30) === 0
+    const maxLabels = compact ? 6 : 30;
+    const label = i % Math.ceil(days.length / maxLabels) === 0
       ? '<text x="' + (x + bw/2) + '" y="' + (H - 4) + '" text-anchor="middle">' + d.date.slice(5) + '</text>' : '';
     return '<rect class="b" x="' + (x + 1) + '" y="' + (H - 18 - h) + '" width="' + Math.max(1, bw - 2) + '" height="' + h + '" rx="2">'
       + '<title>' + d.date + ': ' + fmt(val(d.metrics)) + '</title></rect>' + label;
@@ -149,9 +181,12 @@ function render() {
   const rangeBtn = (v, l) => '<button data-action="range" data-value="' + v + '" class="' + (s.range === v ? 'active' : '') + '">' + l + '</button>';
   const scopeBtn = (v, l) => '<button data-action="scope" data-value="' + v + '" class="' + (s.scope === v ? 'active' : '') + '">' + l + '</button>';
 
-  let h = '<div class="row"><h1>' + esc(ki.key_alias || ui?.user_email || 'LiteLLM') + '</h1><span class="muted">' + esc(s.host) + '</span>'
-    + '<span class="spacer"></span>' + (s.loading ? '<span class="muted">Refreshing…</span>' : '')
-    + '<button data-action="refresh">Refresh</button><button data-action="login">Switch account</button><button data-action="logout">Sign out</button></div>';
+  let h = compact
+    ? '<div class="row"><strong>' + esc(ki.key_alias || ui?.user_email || 'LiteLLM') + '</strong><span class="spacer"></span>'
+      + (s.loading ? '<span class="muted">Refreshing…</span>' : '') + '</div><div class="muted">' + esc(s.host) + '</div>'
+    : '<div class="row"><h1>' + esc(ki.key_alias || ui?.user_email || 'LiteLLM') + '</h1><span class="muted">' + esc(s.host) + '</span>'
+      + '<span class="spacer"></span>' + (s.loading ? '<span class="muted">Refreshing…</span>' : '')
+      + '<button data-action="refresh">Refresh</button><button data-action="login">Switch account</button><button data-action="logout">Sign out</button></div>';
   if (s.error) h += '<div class="error">⚠ ' + esc(s.error) + '</div>';
 
   h += '<h2>Budget</h2><div class="card"><div class="row"><span class="big">' + money(spend) + '</span>'
@@ -163,8 +198,11 @@ function render() {
   if (reset) h += '<div class="muted" style="margin-top:6px">Resets: ' + fmtDate(reset) + '</div>';
   h += '</div>';
 
-  h += '<h2 class="row">Usage <span class="spacer"></span>' + rangeBtn(1,'Today') + rangeBtn(7,'7 days') + rangeBtn(30,'30 days') + rangeBtn(90,'90 days')
-    + '<span style="width:12px"></span>' + scopeBtn('user','All my keys') + scopeBtn('key','This key') + '</h2>';
+  h += '<h2 class="row">Usage <span class="spacer"></span>' + (compact
+      ? '</h2><div class="row">' + rangeBtn(1,'1d') + rangeBtn(7,'7d') + rangeBtn(30,'30d') + rangeBtn(90,'90d')
+        + '<span class="spacer"></span>' + scopeBtn('user','All keys') + scopeBtn('key','This key') + '</div><div style="height:8px"></div>'
+      : rangeBtn(1,'Today') + rangeBtn(7,'7 days') + rangeBtn(30,'30 days') + rangeBtn(90,'90 days')
+        + '<span style="width:12px"></span>' + scopeBtn('user','All my keys') + scopeBtn('key','This key') + '</h2>');
   h += '<div class="grid">'
     + '<div class="card"><div class="muted">Spend</div><div class="big">' + money(t.spend) + '</div></div>'
     + '<div class="card"><div class="muted">Total tokens</div><div class="big">' + tokens(t.total_tokens) + '</div></div>'
@@ -181,7 +219,11 @@ function render() {
       h += '<p class="muted">No usage in this period.</p>';
     } else {
       const maxSpend = Math.max(...s.modelUsage.map(m => m.metrics.spend), 1e-9);
-      h += '<table><tr><th>Model</th><th>Spend</th><th>Tokens</th><th>Input</th><th>Output</th><th>Requests</th><th style="width:22%"></th></tr>'
+      if (compact) {
+        h += s.modelUsage.map(m => '<div class="model"><div class="row"><code title="' + esc(m.name) + '">' + esc(m.name) + '</code><span>' + money(m.metrics.spend) + '</span></div>'
+          + '<div class="bar"><div style="width:' + (m.metrics.spend / maxSpend * 100).toFixed(1) + '%"></div></div>'
+          + '<div class="muted">' + tokens(m.metrics.total_tokens) + ' tokens · ' + num(m.metrics.api_requests) + ' requests</div></div>').join('');
+      } else h += '<table><tr><th>Model</th><th>Spend</th><th>Tokens</th><th>Input</th><th>Output</th><th>Requests</th><th style="width:22%"></th></tr>'
         + s.modelUsage.map(m => '<tr><td><code>' + esc(m.name) + '</code></td><td>' + money(m.metrics.spend) + '</td><td>' + tokens(m.metrics.total_tokens)
           + '</td><td>' + tokens(m.metrics.prompt_tokens) + '</td><td>' + tokens(m.metrics.completion_tokens) + '</td><td>' + num(m.metrics.api_requests)
           + '</td><td><div class="bar"><div style="width:' + (m.metrics.spend / maxSpend * 100).toFixed(1) + '%"></div></div></td></tr>').join('')
@@ -198,7 +240,8 @@ function render() {
   if (s.models.length) {
     h += '<h2>Available models (' + s.models.length + ')</h2><div class="chips">' + s.models.map(m => '<code>' + esc(m) + '</code>').join('') + '</div>';
   }
-  if (s.lastUpdated) h += '<p class="muted" style="margin-top:20px">Last updated: ' + fmtDate(s.lastUpdated) + '</p>';
+  if (compact) h += '<button class="primary full" data-action="open">Open full dashboard</button>';
+  if (s.lastUpdated) h += '<p class="muted" style="margin-top:' + (compact ? 10 : 20) + 'px">Last updated: ' + fmtDate(s.lastUpdated) + '</p>';
   root.innerHTML = h;
 }
 </script>

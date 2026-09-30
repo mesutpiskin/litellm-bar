@@ -47,8 +47,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "$VSIX" \
-            --title "LiteLLM Usage $VERSION" --generate-notes
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$VSIX" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$VSIX" --title "LiteLLM Usage $VERSION" --generate-notes
+          fi
 
       # Preferred: Microsoft Entra ID via OIDC (no long-lived secret). Enabled when the
       # AZURE_CLIENT_ID and AZURE_TENANT_ID repository variables are set.

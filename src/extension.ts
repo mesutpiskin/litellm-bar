@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { addMetrics, ApiError, DailyEntry, emptyMetrics, KeyInfo, LiteLLMClient, Metrics, UserInfoResponse } from './client';
-import { DashboardPanel } from './dashboard';
+import { broadcast, DashboardPanel, UsageViewProvider } from './dashboard';
 
 type AuthMode = 'apiKey' | 'password';
 export type Range = 1 | 7 | 30 | 90;
@@ -34,6 +34,8 @@ export function activate(context: vscode.ExtensionContext) {
   controller = new UsageController(context);
   context.subscriptions.push(
     controller,
+    vscode.window.registerWebviewViewProvider(UsageViewProvider.viewType, new UsageViewProvider(controller),
+      { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand('litellm.showDashboard', () => controller!.showDashboard()),
     vscode.commands.registerCommand('litellm.login', () => controller!.login()),
     vscode.commands.registerCommand('litellm.logout', () => controller!.logout()),
@@ -294,7 +296,7 @@ class UsageController implements vscode.Disposable {
       tip.appendMarkdown('\n\n_Click to open the dashboard_');
       item.tooltip = tip;
     }
-    DashboardPanel.update(s);
+    broadcast(s);
   }
 }
 

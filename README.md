@@ -10,6 +10,7 @@ Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, t
 
 ## Features
 
+- **Activity Bar view** — a LiteLLM icon in the left sidebar opens a compact usage view with refresh, sign-in and full-dashboard actions.
 - **Status bar** — today's spend (or today's tokens / total spend) at a glance, with a quick summary on hover.
 - **Usage dashboard**
   - Total spend vs. budget, budget reset date, RPM / TPM limits
@@ -29,7 +30,7 @@ Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, t
 3. Enter your proxy URL (e.g. `https://litellm.example.com`) and choose a sign-in method:
    - **API Key** — a virtual key created in the LiteLLM UI under *Virtual Keys*.
    - **Username / Password** — your LiteLLM UI credentials. If you choose to store the password, the session is renewed automatically when it expires. SSO logins are not supported; use an API key instead.
-4. Click the status bar item to open the dashboard.
+4. Open the **LiteLLM** icon in the Activity Bar, or click the status bar item to open the full dashboard.
 
 ## Commands
 

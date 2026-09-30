@@ -2,7 +2,7 @@
   "name": "litellm-usage",
   "displayName": "LiteLLM Usage",
   "description": "Track your LiteLLM proxy spend, token and model usage from the VS Code status bar — no admin account required.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "mesutpiskin",
   "author": {
     "name": "Mesut Pişkin",
@@ -50,24 +50,69 @@
         "command": "litellm.showDashboard",
         "title": "Show Usage Dashboard",
         "category": "LiteLLM",
-        "icon": "$(graph)"
+        "icon": "$(link-external)"
       },
       {
         "command": "litellm.login",
         "title": "Sign In",
-        "category": "LiteLLM"
+        "category": "LiteLLM",
+        "icon": "$(account)"
       },
       {
         "command": "litellm.logout",
         "title": "Sign Out",
-        "category": "LiteLLM"
+        "category": "LiteLLM",
+        "icon": "$(sign-out)"
       },
       {
         "command": "litellm.refresh",
         "title": "Refresh",
-        "category": "LiteLLM"
+        "category": "LiteLLM",
+        "icon": "$(refresh)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "litellm",
+          "title": "LiteLLM Usage",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "litellm": [
+        {
+          "type": "webview",
+          "id": "litellm.usageView",
+          "name": "Usage"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "litellm.refresh",
+          "when": "view == litellm.usageView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "litellm.showDashboard",
+          "when": "view == litellm.usageView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "litellm.login",
+          "when": "view == litellm.usageView",
+          "group": "account@1"
+        },
+        {
+          "command": "litellm.logout",
+          "when": "view == litellm.usageView",
+          "group": "account@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "LiteLLM Usage",
       "properties": {

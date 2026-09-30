@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Activity Bar view: compact usage sidebar with refresh, sign-in / sign-out and "open full dashboard" actions.
+
 ## 0.3.0
 
 - English UI and documentation.
