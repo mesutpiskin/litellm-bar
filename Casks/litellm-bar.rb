@@ -1,6 +1,6 @@
 cask "litellm-bar" do
-  version "0.0.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  version "0.1.0"
+  sha256 "c1a712b0b2deb45b686f4a40b11fe7a531b979379b6f26fbb569ff49cee0a911"
 
   url "https://github.com/mesutpiskin/litellm-bar/releases/download/v#{version}/LiteLLMBar-#{version}.zip"
   name "LiteLLM Bar"
