@@ -21,6 +21,7 @@ Admin hesabı gerektirmez — kendi **sanal anahtarınız (sk-…)** ya da LiteL
 
 ```bash
 brew tap mesutpiskin/litellm-bar https://github.com/mesutpiskin/litellm-bar
+brew trust mesutpiskin/litellm-bar   # Homebrew 7+: üçüncü parti tap onayı
 brew install --cask litellm-bar
 ```
 
