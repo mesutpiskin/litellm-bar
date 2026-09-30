@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { LiteLLMClient } from './client';
 
-export type AuthMode = 'apiKey' | 'password';
+export type AuthMode = 'apiKey' | 'password' | 'sso';
 type SecretName = 'apiKey' | 'sessionKey' | 'password';
 
 export interface Account {
@@ -11,6 +11,8 @@ export interface Account {
   baseUrl: string;
   authMode: AuthMode;
   username?: string;
+  /** LiteLLM user id, for SSO sessions whose token is not a regular virtual key. */
+  userId?: string;
 }
 
 const ACCOUNTS = 'accounts';
@@ -44,7 +46,11 @@ export class AccountStore {
   }
 
   async rename(id: string, label: string) {
-    await this.context.globalState.update(ACCOUNTS, this.list().map(a => a.id === id ? { ...a, label } : a));
+    await this.update(id, { label });
+  }
+
+  async update(id: string, patch: Partial<Omit<Account, 'id'>>) {
+    await this.context.globalState.update(ACCOUNTS, this.list().map(a => a.id === id ? { ...a, ...patch } : a));
   }
 
   async remove(id: string) {
@@ -57,7 +63,7 @@ export class AccountStore {
     }
   }
 
-  /** The bearer key used for API calls: the virtual key, or the session key from a UI login. */
+  /** The bearer key used for API calls: the virtual key, or the session key from a UI / SSO login. */
   key(account: Account): Thenable<string | undefined> {
     return this.secret(account, account.authMode === 'apiKey' ? 'apiKey' : 'sessionKey');
   }

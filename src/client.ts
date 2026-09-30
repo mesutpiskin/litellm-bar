@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as http from 'http';
 import * as https from 'https';
 
@@ -54,6 +55,30 @@ export interface SessionInfo {
   key: string;
   userId?: string;
   userEmail?: string;
+}
+
+export interface SsoSession {
+  loginId: string;
+  /** Present on proxies with the hardened flow (`POST /sso/cli/start`); absent on the legacy flow. */
+  pollSecret?: string;
+  userCode?: string;
+  browserUrl: string;
+}
+
+export interface SsoTeam {
+  id: string;
+  alias?: string;
+}
+
+export type SsoResult =
+  | { kind: 'ready'; key: string; userId?: string; teamId?: string }
+  | { kind: 'selectTeam'; teams: SsoTeam[] };
+
+export interface SsoWaitOptions {
+  teamId?: string;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  isCancelled?: () => boolean;
 }
 
 export class ApiError extends Error {
@@ -147,6 +172,85 @@ export class LiteLLMClient {
     throw new Error('Login succeeded but no session key was returned. If your proxy uses SSO, sign in with an API key instead.');
   }
 
+  /**
+   * Starts LiteLLM's CLI SSO flow: the user signs in with the proxy's own SSO provider
+   * (Google, Microsoft, Okta, …) in the browser while we poll for the resulting session key.
+   */
+  async startSso(): Promise<SsoSession> {
+    const res = await this.request('POST', 'sso/cli/start');
+    if (res.status === 404 || res.status === 405) {
+      // Proxies before the hardened flow: the client chooses the session id.
+      const loginId = `sk-${crypto.randomUUID()}`;
+      return { loginId, browserUrl: this.url('sso/key/generate', { source: 'litellm-cli', key: loginId }).href };
+    }
+    if (res.status !== 200) { throw new ApiError(res.status, errorMessage(res)); }
+
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(res.body);
+    } catch {
+      throw new Error('The proxy returned a non-JSON response to /sso/cli/start. A gateway in front of LiteLLM may be intercepting it.');
+    }
+    const { login_id: loginId, poll_secret: pollSecret, user_code: userCode } = data;
+    if (typeof loginId !== 'string' || typeof pollSecret !== 'string') {
+      throw new Error('Unexpected response from /sso/cli/start. The proxy version may not support SSO sign-in for tools.');
+    }
+    const query: Record<string, string> = { source: 'litellm-cli', key: loginId };
+    if (typeof userCode === 'string' && typeof data.verification_uri_complete === 'string') { query.user_code = userCode; }
+    return {
+      loginId,
+      pollSecret,
+      userCode: typeof userCode === 'string' ? userCode : undefined,
+      browserUrl: this.url('sso/key/generate', query).href,
+    };
+  }
+
+  /** Polls until the browser sign-in finishes, the user must pick a team, or the session expires. */
+  async waitForSso(session: SsoSession, opts: SsoWaitOptions = {}): Promise<SsoResult> {
+    const deadline = Date.now() + (opts.timeoutMs ?? 10 * 60_000);
+    const interval = opts.pollIntervalMs ?? 2000;
+    const headers: Record<string, string> = session.pollSecret ? { 'x-litellm-cli-poll-secret': session.pollSecret } : {};
+    const query: Record<string, string> = opts.teamId ? { team_id: opts.teamId } : {};
+
+    while (Date.now() < deadline) {
+      if (opts.isCancelled?.()) { throw new Error('Sign-in cancelled.'); }
+      let res: RawResponse | undefined;
+      try {
+        res = await this.request('GET', `sso/cli/poll/${encodeURIComponent(session.loginId)}`, query, undefined, headers);
+      } catch {
+        // Transient network error: keep polling.
+      }
+      if (res?.status === 200) {
+        const data = JSON.parse(res.body);
+        if (data.status === 'ready') {
+          if (data.requires_team_selection && !opts.teamId) {
+            return { kind: 'selectTeam', teams: normalizeTeams(data.teams, data.team_details) };
+          }
+          if (typeof data.key !== 'string') { throw new Error('Sign-in finished but the proxy returned no key.'); }
+          const claims = jwtClaims(data.key);
+          return {
+            kind: 'ready',
+            key: data.key,
+            userId: data.user_id ?? claims?.user_id,
+            teamId: data.team_id ?? undefined,
+          };
+        }
+      } else if (res && session.pollSecret && res.status >= 400 && res.status < 500 && res.status !== 429) {
+        // The hardened flow reports rejected / expired sessions as client errors; the legacy flow 404s until ready.
+        throw new ApiError(res.status, `The proxy rejected the sign-in session. ${errorMessage(res)}`);
+      }
+      await new Promise(r => setTimeout(r, interval));
+    }
+    throw new Error('Timed out waiting for the browser sign-in. If you finished signing in, the proxy may not support SSO sign-in '
+      + 'for tools, or it runs several workers without a shared Redis cache.');
+  }
+
+  private url(path: string, query?: Record<string, string>): URL {
+    const url = new URL(this.base.pathname.replace(/\/$/, '') + '/' + path, this.base);
+    for (const [k, v] of Object.entries(query ?? {})) { url.searchParams.set(k, v); }
+    return url;
+  }
+
   private async get<T>(path: string, query?: Record<string, string>): Promise<T> {
     const res = await this.request('GET', path, query);
     if (res.status < 200 || res.status >= 300) { throw new ApiError(res.status, errorMessage(res)); }
@@ -159,8 +263,7 @@ export class LiteLLMClient {
 
   private request(method: string, path: string, query?: Record<string, string>, body?: string,
                   extraHeaders: Record<string, string> = {}): Promise<RawResponse> {
-    const url = new URL(this.base.pathname.replace(/\/$/, '') + '/' + path, this.base);
-    for (const [k, v] of Object.entries(query ?? {})) { url.searchParams.set(k, v); }
+    const url = this.url(path, query);
 
     const headers: Record<string, string> = { Accept: 'application/json', ...extraHeaders };
     if (this.apiKey) { headers.Authorization = `Bearer ${this.apiKey}`; }
@@ -202,6 +305,24 @@ function extractToken(res: RawResponse): string | undefined {
     }
   } catch { /* not JSON */ }
   return undefined;
+}
+
+function normalizeTeams(teams: unknown, details: unknown): SsoTeam[] {
+  if (Array.isArray(details) && details.length) {
+    return details.filter(d => d && d.team_id).map(d => ({ id: String(d.team_id), alias: d.team_alias ?? undefined }));
+  }
+  return Array.isArray(teams) ? teams.map(t => ({ id: String(t) })) : [];
+}
+
+/** Decodes a JWT payload without verifying it (the proxy is the one that trusts it). */
+export function jwtClaims(token: string): Record<string, any> | undefined {
+  const part = token.split('.')[1];
+  if (!part || token.split('.').length !== 3) { return undefined; }
+  try {
+    return JSON.parse(Buffer.from(part, 'base64url').toString('utf8'));
+  } catch {
+    return undefined;
+  }
 }
 
 function decodeSession(jwt: string): SessionInfo {

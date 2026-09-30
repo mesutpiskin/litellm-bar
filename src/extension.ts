@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Account, AccountStore, AuthMode } from './accounts';
-import { addMetrics, ApiError, DailyEntry, emptyMetrics, KeyInfo, LiteLLMClient, Metrics, UserInfoResponse } from './client';
+import { addMetrics, ApiError, DailyEntry, emptyMetrics, jwtClaims, KeyInfo, LiteLLMClient, Metrics, UserInfoResponse } from './client';
 import { broadcast, DashboardPanel, UsageViewProvider } from './dashboard';
 
 export type Range = 1 | 7 | 30 | 90;
@@ -23,6 +23,9 @@ export interface UsageState {
   accountLabel?: string;
   accounts: AccountSummary[];
   error?: string;
+  /** The active SSO session expired; the user has to sign in again in the browser. */
+  needsReauth?: boolean;
+  sessionExpiresAt?: string;
   lastUpdated?: string;
   range: Range;
   scope: Scope;
@@ -52,6 +55,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('litellm.switchAccount', () => controller!.switchAccount()),
     vscode.commands.registerCommand('litellm.renameAccount', () => controller!.renameAccount()),
     vscode.commands.registerCommand('litellm.removeAccount', () => controller!.removeAccount()),
+    vscode.commands.registerCommand('litellm.reauthenticate', () => controller!.reauthenticate()),
     vscode.commands.registerCommand('litellm.refresh', () => controller!.refresh()),
   );
   void controller.refresh();
@@ -67,6 +71,8 @@ class UsageController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   /** Incremented on every refresh / account switch so late responses from a previous account are dropped. */
   private generation = 0;
+  /** SSO accounts we already nagged about an expired session (cleared on successful sign-in). */
+  private readonly reauthPrompted = new Set<string>();
   state: UsageState;
 
   constructor(private readonly context: vscode.ExtensionContext, private readonly accounts: AccountStore) {
@@ -143,6 +149,7 @@ class UsageController implements vscode.Disposable {
     const base = LiteLLMClient.normalize(baseUrl)!;
 
     const pick = await vscode.window.showQuickPick([
+      { label: '$(globe) Browser sign-in (SSO)', description: 'Google, Microsoft, Okta… via your proxy', mode: 'sso' as AuthMode },
       { label: '$(key) API Key', description: 'Virtual key (sk-…)', mode: 'apiKey' as AuthMode },
       { label: '$(account) Username / Password', description: 'LiteLLM UI credentials', mode: 'password' as AuthMode },
     ], { title: 'Add LiteLLM account (2/3): sign-in method', ignoreFocusOut: true });
@@ -153,7 +160,13 @@ class UsageController implements vscode.Disposable {
       let secrets: { apiKey?: string; sessionKey?: string; password?: string };
       let suggested: string;
 
-      if (pick.mode === 'apiKey') {
+      if (pick.mode === 'sso') {
+        const result = await this.ssoSignIn(base);
+        if (!result) { return; }
+        account = { label: '', baseUrl: base.href, authMode: 'sso', userId: result.userId };
+        secrets = { sessionKey: result.key };
+        suggested = `${result.userId ?? 'SSO'} @ ${base.host}`;
+      } else if (pick.mode === 'apiKey') {
         const key = (await vscode.window.showInputBox({
           title: 'Add LiteLLM account (3/3): virtual key', prompt: 'sk-...', password: true, ignoreFocusOut: true,
         }))?.trim();
@@ -189,6 +202,54 @@ class UsageController implements vscode.Disposable {
       const created = await this.accounts.add({ ...account, label: label?.trim() || suggested }, secrets);
       await this.activate(created);
       vscode.window.showInformationMessage(`LiteLLM: added "${created.label}".`);
+    } catch (e) {
+      vscode.window.showErrorMessage(`LiteLLM: ${(e as Error).message}`);
+    }
+  }
+
+  /** Runs LiteLLM's browser SSO flow and returns the session key, or undefined when cancelled. */
+  private async ssoSignIn(base: URL): Promise<{ key: string; userId?: string } | undefined> {
+    const client = new LiteLLMClient(base, undefined, this.insecure);
+    const session = await client.startSso();
+    const opened = await vscode.env.openExternal(vscode.Uri.parse(session.browserUrl, true));
+    if (!opened) { throw new Error(`Could not open the browser. Visit ${session.browserUrl} manually.`); }
+
+    return vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: 'LiteLLM: finish signing in in your browser',
+      cancellable: true,
+    }, async (progress, token) => {
+      if (session.userCode) { progress.report({ message: `Verification code: ${session.userCode}` }); }
+      const isCancelled = () => token.isCancellationRequested;
+      let result = await client.waitForSso(session, { isCancelled });
+      if (result.kind === 'selectTeam') {
+        const team = await vscode.window.showQuickPick(
+          result.teams.map(t => ({ label: t.alias ?? t.id, description: t.alias ? t.id : undefined, id: t.id })),
+          { title: 'Select the team for this session', ignoreFocusOut: true });
+        if (!team) { return undefined; }
+        progress.report({ message: `Signing in to team ${team.label}…` });
+        result = await client.waitForSso(session, { teamId: team.id, isCancelled });
+      }
+      return result.kind === 'ready' ? { key: result.key, userId: result.userId } : undefined;
+    }).then(undefined, e => {
+      if ((e as Error).message === 'Sign-in cancelled.') { return undefined; }
+      throw e;
+    });
+  }
+
+  /** Renews an expired SSO session for the active account. */
+  async reauthenticate() {
+    const account = this.accounts.active;
+    const base = account && LiteLLMClient.normalize(account.baseUrl);
+    if (!account || !base) { return this.addAccount(); }
+    if (account.authMode !== 'sso') { return this.refresh(); }
+    try {
+      const result = await this.ssoSignIn(base);
+      if (!result) { return; }
+      await this.accounts.setSecret(account, 'sessionKey', result.key);
+      if (result.userId && result.userId !== account.userId) { await this.accounts.update(account.id, { userId: result.userId }); }
+      this.reauthPrompted.delete(account.id);
+      await this.refresh();
     } catch (e) {
       vscode.window.showErrorMessage(`LiteLLM: ${(e as Error).message}`);
     }
@@ -270,6 +331,13 @@ class UsageController implements vscode.Disposable {
     }
   }
 
+  private promptReauth(account: Account) {
+    if (this.reauthPrompted.has(account.id)) { return; }
+    this.reauthPrompted.add(account.id);
+    void vscode.window.showWarningMessage(`LiteLLM: the SSO session for "${account.label}" has expired.`, 'Sign in again')
+      .then(choice => { if (choice) { void this.reauthenticate(); } });
+  }
+
   async refresh(retried = false): Promise<void> {
     const gen = ++this.generation;
     const account = this.accounts.active;
@@ -288,21 +356,30 @@ class UsageController implements vscode.Disposable {
     void this.refreshSummaries(gen);
     this.state.loading = true;
     this.render();
+    const sso = account.authMode === 'sso';
     try {
-      const info = (await client.keyInfo()).info;
-      const modelsP = client.models().catch(() => this.state.models);
-      const userP = info.user_id ? client.userInfo(info.user_id).catch(() => undefined) : Promise.resolve(undefined);
+      // SSO session tokens are short-lived per-session credentials, not virtual keys, so /key/info
+      // does not describe them; usage and budget come from the user instead.
+      const info: KeyInfo = sso ? { user_id: account.userId ?? jwtClaims(key)?.user_id } : (await client.keyInfo()).info;
+      const modelsP = client.models().catch(e => {
+        if (sso && e instanceof ApiError && e.unauthorized) { throw e; }
+        return this.state.models;
+      });
+      const userP = info.user_id
+        ? client.userInfo(info.user_id).catch(e => {
+          if (sso && e instanceof ApiError && e.unauthorized) { throw e; }
+          return undefined;
+        })
+        : Promise.resolve(undefined);
 
       const [start, end] = dateBounds(this.state.range);
-      let entries: DailyEntry[] = [];
-      let unsupported = false;
-      try {
-        entries = await client.dailyActivity(start, end, this.state.scope === 'key' ? info.token : undefined);
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 404)) { throw e; }
-        unsupported = true;
-      }
-      const [models, userInfo] = await Promise.all([modelsP, userP]);
+      const activityP = client.dailyActivity(start, end, this.state.scope === 'key' ? info.token : undefined)
+        .then(entries => ({ entries, unsupported: false }), (e: unknown) => {
+          if (e instanceof ApiError && e.status === 404) { return { entries: [] as DailyEntry[], unsupported: true }; }
+          throw e;
+        });
+      // Awaited together so a failure in one request never leaves another rejection unhandled.
+      const [models, userInfo, { entries, unsupported }] = await Promise.all([modelsP, userP, activityP]);
       if (gen !== this.generation) { return; }
 
       this.state.keyInfo = info;
@@ -314,6 +391,9 @@ class UsageController implements vscode.Disposable {
         spend: userInfo?.user_info?.spend ?? info.spend, maxBudget: info.max_budget ?? userInfo?.user_info?.max_budget,
         error: undefined,
       });
+      const exp = sso ? jwtClaims(key)?.exp : undefined;
+      this.state.sessionExpiresAt = typeof exp === 'number' ? new Date(exp * 1000).toISOString() : undefined;
+      this.state.needsReauth = false;
       this.state.lastUpdated = new Date().toISOString();
       this.state.error = undefined;
     } catch (e) {
@@ -322,6 +402,11 @@ class UsageController implements vscode.Disposable {
         return this.refresh(true);
       }
       this.state.error = (e as Error).message;
+      if (sso && e instanceof ApiError && e.unauthorized) {
+        this.state.needsReauth = true;
+        this.state.error = 'Your SSO session has expired. Sign in again to continue.';
+        this.promptReauth(account);
+      }
       this.updateSummary(account.id, { error: this.state.error });
     } finally {
       if (gen === this.generation) {
@@ -338,8 +423,10 @@ class UsageController implements vscode.Disposable {
       try {
         const client = this.client(a, await this.accounts.key(a));
         if (!client) { return; }
-        const { info } = await client.keyInfo();
-        const user = info.user_id ? await client.userInfo(info.user_id).catch(() => undefined) : undefined;
+        const info: KeyInfo = a.authMode === 'sso' ? { user_id: a.userId } : (await client.keyInfo()).info;
+        const user = info.user_id
+          ? await client.userInfo(info.user_id).catch(e => { if (a.authMode === 'sso') { throw e; } return undefined; })
+          : undefined;
         if (gen === this.generation) {
           this.updateSummary(a.id, {
             spend: user?.user_info?.spend ?? info.spend, maxBudget: info.max_budget ?? user?.user_info?.max_budget,
@@ -383,7 +470,7 @@ class UsageController implements vscode.Disposable {
       item.tooltip = 'Add a LiteLLM account to see your usage';
       item.command = s.accounts.length > 1 ? 'litellm.switchAccount' : 'litellm.addAccount';
     } else {
-      item.command = 'litellm.showDashboard';
+      item.command = s.needsReauth ? 'litellm.reauthenticate' : 'litellm.showDashboard';
       const icon = s.loading ? '$(sync~spin)' : s.error ? '$(warning)' : '$(pulse)';
       let text = '';
       switch (this.config.get<string>('statusBar', 'todaySpend')) {
@@ -416,6 +503,7 @@ class UsageController implements vscode.Disposable {
 
 function emptyUsage() {
   return {
+    needsReauth: false, sessionExpiresAt: undefined as string | undefined,
     keyInfo: undefined, userInfo: undefined, models: [] as string[], days: [], modelUsage: [],
     totals: emptyMetrics(), today: emptyMetrics(), activityUnsupported: false,
   };

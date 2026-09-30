@@ -1,8 +1,8 @@
 {
   "name": "litellm-usage",
   "displayName": "LiteLLM Usage",
-  "description": "Track your LiteLLM proxy spend, token and model usage from the VS Code status bar — no admin account required.",
-  "version": "0.5.0",
+  "description": "Track your LiteLLM proxy spend, token and model usage from VS Code — sign in with SSO, a virtual key or username/password. No admin account required.",
+  "version": "0.6.0",
   "publisher": "mesutpiskin",
   "author": {
     "name": "Mesut Pişkin",
@@ -31,14 +31,16 @@
     "Other"
   ],
   "keywords": [
+    "budget",
+    "cost",
+    "google",
     "litellm",
     "llm",
     "openai",
-    "tokens",
-    "usage",
     "spend",
-    "budget",
-    "cost"
+    "sso",
+    "tokens",
+    "usage"
   ],
   "main": "./out/extension.js",
   "activationEvents": [
@@ -68,6 +70,12 @@
         "command": "litellm.renameAccount",
         "title": "Rename Account",
         "category": "LiteLLM"
+      },
+      {
+        "command": "litellm.reauthenticate",
+        "title": "Sign In Again (SSO)",
+        "category": "LiteLLM",
+        "icon": "$(sign-in)"
       },
       {
         "command": "litellm.removeAccount",

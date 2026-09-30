@@ -6,7 +6,7 @@
 
 Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, token and model usage without leaving your editor.
 
-**No admin account required** — sign in with your own virtual key (`sk-…`) or your LiteLLM UI username and password.
+**No admin account required** — sign in with your proxy's **SSO** (Google, Microsoft, Okta…), your own virtual key (`sk-…`) or your LiteLLM UI username and password.
 
 ## Features
 
@@ -29,8 +29,9 @@ Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, t
 1. Install **LiteLLM Usage** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=mesutpiskin.litellm-usage) or [Open VSX](https://open-vsx.org/extension/mesutpiskin/litellm-usage) (Cursor, VSCodium, Windsurf…).
 2. Click **LiteLLM: Add account** in the status bar, or run `LiteLLM: Add Account` from the Command Palette.
 3. Enter your proxy URL (e.g. `https://litellm.example.com`), choose a sign-in method and give the account a name:
+   - **Browser sign-in (SSO)** — opens your proxy's login page (Google, Microsoft Entra ID, Okta, …) in your browser and signs you in once you finish there. Uses the same flow as `litellm-proxy login`.
    - **API Key** — a virtual key created in the LiteLLM UI under *Virtual Keys*.
-   - **Username / Password** — your LiteLLM UI credentials. If you choose to store the password, the session is renewed automatically when it expires. SSO logins are not supported; use an API key instead.
+   - **Username / Password** — your LiteLLM UI credentials. If you choose to store the password, the session is renewed automatically when it expires.
 4. Open the **LiteLLM** icon in the Activity Bar, or click the status bar item to open the full dashboard.
 
 ## Commands
@@ -42,6 +43,7 @@ Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, t
 | `LiteLLM: Switch Account` | Switch the active account |
 | `LiteLLM: Rename Account` | Rename an account |
 | `LiteLLM: Remove Account` | Remove an account and its stored credentials |
+| `LiteLLM: Sign In Again (SSO)` | Renew an expired SSO session |
 | `LiteLLM: Refresh` | Refresh now |
 
 ## Settings
@@ -61,8 +63,16 @@ Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, t
 | `GET /user/daily/activity` | Daily and per-model tokens and spend |
 | `GET /v1/models` | Models available to the key |
 | `POST /login`, `POST /v2/login` | Username / password sign-in |
+| `POST /sso/cli/start`, `GET /sso/cli/poll/{id}`, `/sso/key/generate` | Browser SSO sign-in |
 
 Daily and per-model breakdowns need a LiteLLM version that exposes `/user/daily/activity`. On older versions only total spend is shown.
+
+### About SSO sign-in
+
+- SSO must be configured on the proxy ([LiteLLM docs](https://docs.litellm.ai/docs/proxy/cli_sso)). The extension never sees your identity provider password.
+- The session key the proxy issues is short-lived (24 hours by default, `LITELLM_CLI_JWT_EXPIRATION_HOURS`). When it expires the extension asks you to sign in again — one click in the browser.
+- If the proxy runs several workers or replicas, it needs a shared Redis cache for the sign-in to complete; otherwise sign-in times out.
+- Usage and budget for SSO accounts are shown per user (session keys are not virtual keys, so the *This key* scope does not apply).
 
 ## Development
 

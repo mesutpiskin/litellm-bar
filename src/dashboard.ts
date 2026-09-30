@@ -11,6 +11,7 @@ export interface DashboardHost {
   switchAccount(id?: string): Promise<void>;
   renameAccount(id?: string): Promise<void>;
   removeAccount(id?: string): Promise<void>;
+  reauthenticate(): Promise<void>;
   showDashboard(): void;
 }
 
@@ -34,6 +35,7 @@ function attach(webview: vscode.Webview, host: DashboardHost, compact: boolean):
       case 'switchAccount': void host.switchAccount(msg.value); break;
       case 'renameAccount': void host.renameAccount(msg.value); break;
       case 'removeAccount': void host.removeAccount(msg.value); break;
+      case 'reauth': void host.reauthenticate(); break;
       case 'open': host.showDashboard(); break;
     }
   });
@@ -196,6 +198,7 @@ function render() {
     root.innerHTML = '<h1>LiteLLM Usage</h1>'
       + (s.accounts.length
         ? '<p class="muted">Could not load the selected account.</p>' + accountBar(s) + (s.error ? '<div class="error">⚠ ' + esc(s.error) + '</div>' : '')
+          + (s.needsReauth ? '<button class="primary" data-action="reauth">Sign in again</button>' : '')
         : '<p class="muted">Add a LiteLLM account to see your spend, token and model usage.</p><button class="primary" data-action="addAccount">Add account</button>');
     root.classList.remove('muted');
     return;
@@ -215,6 +218,7 @@ function render() {
       + '<span class="spacer"></span>' + (s.loading ? '<span class="muted">Refreshing…</span>' : '')
       + '<button data-action="refresh">Refresh</button></div>' + accountBar(s);
   if (s.error) h += '<div class="error">⚠ ' + esc(s.error) + '</div>';
+  if (s.needsReauth) h += '<button class="primary" data-action="reauth">Sign in again</button>';
 
   h += '<h2>Budget</h2><div class="card"><div class="row"><span class="big">' + money(spend) + '</span>'
     + (budget ? '<span class="muted">/ ' + money(budget) + '</span>' : '<span class="muted">no budget limit</span>')
@@ -223,6 +227,7 @@ function render() {
     + (ki.tpm_limit ? '<span class="muted">TPM ' + tokens(ki.tpm_limit) + '</span>' : '') + '</div>';
   if (budget) h += '<div class="bar" style="margin-top:8px"><div style="width:' + Math.min(100, spend / budget * 100).toFixed(1) + '%"></div></div>';
   if (reset) h += '<div class="muted" style="margin-top:6px">Resets: ' + fmtDate(reset) + '</div>';
+  if (s.sessionExpiresAt) h += '<div class="muted" style="margin-top:6px">SSO session expires: ' + fmtDate(s.sessionExpiresAt) + '</div>';
   h += '</div>';
 
   h += '<h2 class="row">Usage <span class="spacer"></span>' + (compact

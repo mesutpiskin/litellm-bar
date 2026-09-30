@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+
+- Browser sign-in (SSO): sign in with your proxy's identity provider (Google, Microsoft Entra ID, Okta, …) using LiteLLM's CLI SSO flow, including team selection and legacy proxies.
+- Expired SSO sessions show a "Sign in again" prompt in the status bar, sidebar and dashboard.
+
 ## 0.5.0
 
 - Multiple accounts: add, switch, rename and remove accounts from the sidebar, dashboard, status bar or Command Palette.
