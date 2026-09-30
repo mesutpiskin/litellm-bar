@@ -1,15 +1,27 @@
 import * as vscode from 'vscode';
+import { Account, AccountStore, AuthMode } from './accounts';
 import { addMetrics, ApiError, DailyEntry, emptyMetrics, KeyInfo, LiteLLMClient, Metrics, UserInfoResponse } from './client';
 import { broadcast, DashboardPanel, UsageViewProvider } from './dashboard';
 
-type AuthMode = 'apiKey' | 'password';
 export type Range = 1 | 7 | 30 | 90;
 export type Scope = 'user' | 'key';
+
+export interface AccountSummary {
+  id: string;
+  label: string;
+  host: string;
+  active: boolean;
+  spend?: number;
+  maxBudget?: number | null;
+  error?: string;
+}
 
 export interface UsageState {
   configured: boolean;
   loading: boolean;
   host: string;
+  accountLabel?: string;
+  accounts: AccountSummary[];
   error?: string;
   lastUpdated?: string;
   range: Range;
@@ -24,21 +36,22 @@ export interface UsageState {
   activityUnsupported: boolean;
 }
 
-const SECRET_API_KEY = 'litellm.apiKey';
-const SECRET_SESSION_KEY = 'litellm.sessionKey';
-const SECRET_PASSWORD = 'litellm.password';
-
 let controller: UsageController | undefined;
 
-export function activate(context: vscode.ExtensionContext) {
-  controller = new UsageController(context);
+export async function activate(context: vscode.ExtensionContext) {
+  const accounts = new AccountStore(context);
+  await accounts.migrateLegacy();
+
+  controller = new UsageController(context, accounts);
   context.subscriptions.push(
     controller,
     vscode.window.registerWebviewViewProvider(UsageViewProvider.viewType, new UsageViewProvider(controller),
       { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand('litellm.showDashboard', () => controller!.showDashboard()),
-    vscode.commands.registerCommand('litellm.login', () => controller!.login()),
-    vscode.commands.registerCommand('litellm.logout', () => controller!.logout()),
+    vscode.commands.registerCommand('litellm.addAccount', () => controller!.addAccount()),
+    vscode.commands.registerCommand('litellm.switchAccount', () => controller!.switchAccount()),
+    vscode.commands.registerCommand('litellm.renameAccount', () => controller!.renameAccount()),
+    vscode.commands.registerCommand('litellm.removeAccount', () => controller!.removeAccount()),
     vscode.commands.registerCommand('litellm.refresh', () => controller!.refresh()),
   );
   void controller.refresh();
@@ -52,25 +65,22 @@ class UsageController implements vscode.Disposable {
   private readonly statusItem: vscode.StatusBarItem;
   private timer?: NodeJS.Timeout;
   private readonly disposables: vscode.Disposable[] = [];
+  /** Incremented on every refresh / account switch so late responses from a previous account are dropped. */
+  private generation = 0;
   state: UsageState;
 
-  constructor(private readonly context: vscode.ExtensionContext) {
+  constructor(private readonly context: vscode.ExtensionContext, private readonly accounts: AccountStore) {
     this.statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    this.statusItem.command = 'litellm.showDashboard';
     this.statusItem.show();
 
     this.state = {
       configured: false,
       loading: false,
       host: '',
+      accounts: [],
       range: context.globalState.get<Range>('range', 7),
       scope: context.globalState.get<Scope>('scope', 'user'),
-      models: [],
-      days: [],
-      modelUsage: [],
-      totals: emptyMetrics(),
-      today: emptyMetrics(),
-      activityUnsupported: false,
+      ...emptyUsage(),
     };
 
     this.disposables.push(vscode.workspace.onDidChangeConfiguration(e => {
@@ -90,16 +100,11 @@ class UsageController implements vscode.Disposable {
   }
 
   private get config() { return vscode.workspace.getConfiguration('litellm'); }
-  private get authMode(): AuthMode { return this.context.globalState.get<AuthMode>('authMode', 'apiKey'); }
-  private get username(): string { return this.context.globalState.get<string>('username', ''); }
+  private get insecure() { return this.config.get<boolean>('allowInsecureTLS', false); }
 
-  private async effectiveKey(): Promise<string | undefined> {
-    return this.context.secrets.get(this.authMode === 'apiKey' ? SECRET_API_KEY : SECRET_SESSION_KEY);
-  }
-
-  private client(key?: string): LiteLLMClient | undefined {
-    const base = LiteLLMClient.normalize(this.config.get<string>('baseUrl'));
-    return base ? new LiteLLMClient(base, key, this.config.get<boolean>('allowInsecureTLS', false)) : undefined;
+  private client(account: Account, key?: string): LiteLLMClient | undefined {
+    const base = LiteLLMClient.normalize(account.baseUrl);
+    return base ? new LiteLLMClient(base, key, this.insecure) : undefined;
   }
 
   private scheduleTimer() {
@@ -126,11 +131,11 @@ class UsageController implements vscode.Disposable {
     await this.refresh();
   }
 
-  async login() {
+  async addAccount() {
     const baseUrl = await vscode.window.showInputBox({
-      title: 'LiteLLM proxy URL',
+      title: 'Add LiteLLM account (1/3): proxy URL',
       prompt: 'e.g. https://litellm.example.com',
-      value: this.config.get<string>('baseUrl') ?? '',
+      value: this.accounts.active?.baseUrl.replace(/\/$/, '') ?? '',
       ignoreFocusOut: true,
       validateInput: v => LiteLLMClient.normalize(v) ? undefined : 'Invalid URL',
     });
@@ -140,68 +145,125 @@ class UsageController implements vscode.Disposable {
     const pick = await vscode.window.showQuickPick([
       { label: '$(key) API Key', description: 'Virtual key (sk-…)', mode: 'apiKey' as AuthMode },
       { label: '$(account) Username / Password', description: 'LiteLLM UI credentials', mode: 'password' as AuthMode },
-    ], { title: 'Sign-in method', ignoreFocusOut: true });
+    ], { title: 'Add LiteLLM account (2/3): sign-in method', ignoreFocusOut: true });
     if (!pick) { return; }
 
-    const insecure = this.config.get<boolean>('allowInsecureTLS', false);
     try {
+      let account: Omit<Account, 'id'>;
+      let secrets: { apiKey?: string; sessionKey?: string; password?: string };
+      let suggested: string;
+
       if (pick.mode === 'apiKey') {
         const key = (await vscode.window.showInputBox({
-          title: 'LiteLLM virtual key', prompt: 'sk-...', password: true, ignoreFocusOut: true,
+          title: 'Add LiteLLM account (3/3): virtual key', prompt: 'sk-...', password: true, ignoreFocusOut: true,
         }))?.trim();
         if (!key) { return; }
-        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'LiteLLM: verifying key…' },
-          () => new LiteLLMClient(base, key, insecure).keyInfo());
-        await this.context.secrets.store(SECRET_API_KEY, key);
+        const { info } = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'LiteLLM: verifying key…' },
+          () => new LiteLLMClient(base, key, this.insecure).keyInfo());
+        account = { label: '', baseUrl: base.href, authMode: 'apiKey' };
+        secrets = { apiKey: key };
+        suggested = info.key_alias ? `${info.key_alias} @ ${base.host}` : base.host;
       } else {
         const username = await vscode.window.showInputBox({
-          title: 'Username / email', value: this.username, ignoreFocusOut: true,
+          title: 'Add LiteLLM account (3/3): username / email', ignoreFocusOut: true,
         });
         if (!username) { return; }
         const password = await vscode.window.showInputBox({ title: 'Password', password: true, ignoreFocusOut: true });
         if (!password) { return; }
         const session = await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: 'LiteLLM: signing in…' },
-          () => new LiteLLMClient(base, undefined, insecure).login(username, password));
+          () => new LiteLLMClient(base, undefined, this.insecure).login(username, password));
         const remember = await vscode.window.showQuickPick(['Yes', 'No'], {
           title: 'Store the password in secure storage to renew the session automatically when it expires?',
           ignoreFocusOut: true,
         });
-        await this.context.globalState.update('username', username);
-        await this.context.secrets.store(SECRET_SESSION_KEY, session.key);
-        if (remember === 'Yes') {
-          await this.context.secrets.store(SECRET_PASSWORD, password);
-        } else {
-          await this.context.secrets.delete(SECRET_PASSWORD);
-        }
+        account = { label: '', baseUrl: base.href, authMode: 'password', username };
+        secrets = { sessionKey: session.key, password: remember === 'Yes' ? password : undefined };
+        suggested = `${username} @ ${base.host}`;
       }
-      await this.context.globalState.update('authMode', pick.mode);
-      await this.config.update('baseUrl', base.toString().replace(/\/$/, ''), vscode.ConfigurationTarget.Global);
-      await this.refresh();
-      vscode.window.showInformationMessage('LiteLLM: signed in.');
+
+      const label = await vscode.window.showInputBox({
+        title: 'Account name', prompt: 'Shown in the account switcher', value: suggested, ignoreFocusOut: true,
+      });
+      const created = await this.accounts.add({ ...account, label: label?.trim() || suggested }, secrets);
+      await this.activate(created);
+      vscode.window.showInformationMessage(`LiteLLM: added "${created.label}".`);
     } catch (e) {
       vscode.window.showErrorMessage(`LiteLLM: ${(e as Error).message}`);
     }
   }
 
-  async logout() {
-    await Promise.all([SECRET_API_KEY, SECRET_SESSION_KEY, SECRET_PASSWORD].map(k => this.context.secrets.delete(k)));
-    Object.assign(this.state, {
-      configured: false, keyInfo: undefined, userInfo: undefined, models: [], days: [], modelUsage: [],
-      totals: emptyMetrics(), today: emptyMetrics(), lastUpdated: undefined, error: undefined,
-    });
+  async switchAccount(id?: string) {
+    const all = this.accounts.list();
+    let target = all.find(a => a.id === id);
+    if (!target) {
+      const activeId = this.accounts.active?.id;
+      type Item = vscode.QuickPickItem & { account?: Account };
+      const items: Item[] = [
+        ...all.map(a => ({
+          label: `${a.id === activeId ? '$(check)' : '$(blank)'} ${a.label}`,
+          description: hostOf(a),
+          account: a,
+        })),
+        { label: '', kind: vscode.QuickPickItemKind.Separator },
+        { label: '$(add) Add account…' },
+      ];
+      const pick = await vscode.window.showQuickPick(items, { title: 'Switch LiteLLM account' });
+      if (!pick) { return; }
+      if (!pick.account) { return this.addAccount(); }
+      target = pick.account;
+    }
+    await this.activate(target);
+  }
+
+  async renameAccount(id?: string) {
+    const account = id ? this.accounts.list().find(a => a.id === id) : await this.pickAccount('Rename LiteLLM account');
+    if (!account) { return; }
+    const label = await vscode.window.showInputBox({ title: 'Account name', value: account.label, ignoreFocusOut: true });
+    if (!label?.trim()) { return; }
+    await this.accounts.rename(account.id, label.trim());
+    this.state.accounts = this.state.accounts.map(a => a.id === account.id ? { ...a, label: label.trim() } : a);
+    if (account.id === this.accounts.active?.id) { this.state.accountLabel = label.trim(); }
     this.render();
+  }
+
+  async removeAccount(id?: string) {
+    const account = id ? this.accounts.list().find(a => a.id === id) : await this.pickAccount('Remove LiteLLM account');
+    if (!account) { return; }
+    const ok = await vscode.window.showWarningMessage(
+      `Remove "${account.label}"? Its stored credentials will be deleted.`, { modal: true }, 'Remove');
+    if (ok !== 'Remove') { return; }
+    await this.accounts.remove(account.id);
+    Object.assign(this.state, emptyUsage(), { error: undefined, lastUpdated: undefined });
+    await this.refresh();
+  }
+
+  private async pickAccount(title: string): Promise<Account | undefined> {
+    const all = this.accounts.list();
+    if (all.length <= 1) { return all[0]; }
+    const activeId = this.accounts.active?.id;
+    const pick = await vscode.window.showQuickPick(
+      all.map(a => ({ label: a.label, description: hostOf(a) + (a.id === activeId ? ' · active' : ''), account: a })),
+      { title });
+    return pick?.account;
+  }
+
+  private async activate(account: Account) {
+    await this.accounts.setActive(account.id);
+    Object.assign(this.state, emptyUsage(), { error: undefined, lastUpdated: undefined });
+    await this.refresh();
   }
 
   // MARK: Refresh
 
-  private async reloginIfPossible(): Promise<boolean> {
-    const password = await this.context.secrets.get(SECRET_PASSWORD);
-    const client = this.client();
-    if (this.authMode !== 'password' || !password || !this.username || !client) { return false; }
+  private async reloginIfPossible(account: Account): Promise<boolean> {
+    const password = await this.accounts.secret(account, 'password');
+    const client = this.client(account);
+    if (account.authMode !== 'password' || !password || !account.username || !client) { return false; }
     try {
-      const session = await client.login(this.username, password);
-      await this.context.secrets.store(SECRET_SESSION_KEY, session.key);
+      const session = await client.login(account.username, password);
+      await this.accounts.setSecret(account, 'sessionKey', session.key);
       return true;
     } catch {
       return false;
@@ -209,46 +271,90 @@ class UsageController implements vscode.Disposable {
   }
 
   async refresh(retried = false): Promise<void> {
-    const key = await this.effectiveKey();
-    const client = this.client(key);
-    this.state.host = LiteLLMClient.normalize(this.config.get<string>('baseUrl'))?.host ?? '';
-    this.state.configured = !!(key && client);
-    if (!key || !client) { this.render(); return; }
+    const gen = ++this.generation;
+    const account = this.accounts.active;
+    const key = account && await this.accounts.key(account);
+    const client = account && this.client(account, key);
 
+    this.state.host = account ? hostOf(account) : '';
+    this.state.accountLabel = account?.label;
+    this.state.configured = !!(key && client);
+    this.state.accounts = this.accounts.list().map(a => ({
+      ...(this.state.accounts.find(s => s.id === a.id) ?? {}),
+      id: a.id, label: a.label, host: hostOf(a), active: a.id === account?.id,
+    }));
+    if (!account || !key || !client) { this.render(); return; }
+
+    void this.refreshSummaries(gen);
     this.state.loading = true;
     this.render();
     try {
       const info = (await client.keyInfo()).info;
-      this.state.keyInfo = info;
-
       const modelsP = client.models().catch(() => this.state.models);
       const userP = info.user_id ? client.userInfo(info.user_id).catch(() => undefined) : Promise.resolve(undefined);
 
       const [start, end] = dateBounds(this.state.range);
+      let entries: DailyEntry[] = [];
+      let unsupported = false;
       try {
-        const entries = await client.dailyActivity(start, end, this.state.scope === 'key' ? info.token : undefined);
-        this.aggregate(entries, end);
-        this.state.activityUnsupported = false;
+        entries = await client.dailyActivity(start, end, this.state.scope === 'key' ? info.token : undefined);
       } catch (e) {
         if (!(e instanceof ApiError && e.status === 404)) { throw e; }
-        this.state.activityUnsupported = true;
-        this.aggregate([], end);
+        unsupported = true;
       }
+      const [models, userInfo] = await Promise.all([modelsP, userP]);
+      if (gen !== this.generation) { return; }
 
-      this.state.models = await modelsP;
-      this.state.userInfo = await userP;
+      this.state.keyInfo = info;
+      this.state.userInfo = userInfo;
+      this.state.models = models;
+      this.state.activityUnsupported = unsupported;
+      this.aggregate(entries, end);
+      this.updateSummary(account.id, {
+        spend: userInfo?.user_info?.spend ?? info.spend, maxBudget: info.max_budget ?? userInfo?.user_info?.max_budget,
+        error: undefined,
+      });
       this.state.lastUpdated = new Date().toISOString();
       this.state.error = undefined;
     } catch (e) {
-      if (e instanceof ApiError && e.unauthorized && !retried && await this.reloginIfPossible()) {
-        this.state.loading = false;
+      if (gen !== this.generation) { return; }
+      if (e instanceof ApiError && e.unauthorized && !retried && await this.reloginIfPossible(account)) {
         return this.refresh(true);
       }
       this.state.error = (e as Error).message;
+      this.updateSummary(account.id, { error: this.state.error });
     } finally {
-      this.state.loading = false;
-      this.render();
+      if (gen === this.generation) {
+        this.state.loading = false;
+        this.render();
+      }
     }
+  }
+
+  /** Fetches total spend for the non-active accounts so the switcher can show them side by side. */
+  private async refreshSummaries(gen: number) {
+    const others = this.accounts.list().filter(a => a.id !== this.accounts.active?.id);
+    await Promise.all(others.map(async a => {
+      try {
+        const client = this.client(a, await this.accounts.key(a));
+        if (!client) { return; }
+        const { info } = await client.keyInfo();
+        const user = info.user_id ? await client.userInfo(info.user_id).catch(() => undefined) : undefined;
+        if (gen === this.generation) {
+          this.updateSummary(a.id, {
+            spend: user?.user_info?.spend ?? info.spend, maxBudget: info.max_budget ?? user?.user_info?.max_budget,
+            error: undefined,
+          });
+        }
+      } catch (e) {
+        if (gen === this.generation) { this.updateSummary(a.id, { error: (e as Error).message }); }
+      }
+    }));
+    if (gen === this.generation) { this.render(); }
+  }
+
+  private updateSummary(id: string, patch: Partial<AccountSummary>) {
+    this.state.accounts = this.state.accounts.map(a => a.id === id ? { ...a, ...patch } : a);
   }
 
   private aggregate(entries: DailyEntry[], todayStr: string) {
@@ -273,9 +379,9 @@ class UsageController implements vscode.Disposable {
     const s = this.state;
     const item = this.statusItem;
     if (!s.configured) {
-      item.text = '$(pulse) LiteLLM: Sign in';
-      item.tooltip = 'Sign in to see your LiteLLM usage';
-      item.command = 'litellm.login';
+      item.text = '$(pulse) LiteLLM: Add account';
+      item.tooltip = 'Add a LiteLLM account to see your usage';
+      item.command = s.accounts.length > 1 ? 'litellm.switchAccount' : 'litellm.addAccount';
     } else {
       item.command = 'litellm.showDashboard';
       const icon = s.loading ? '$(sync~spin)' : s.error ? '$(warning)' : '$(pulse)';
@@ -286,18 +392,37 @@ class UsageController implements vscode.Disposable {
         case 'totalSpend': text = money(s.userInfo?.user_info?.spend ?? s.keyInfo?.spend ?? 0); break;
       }
       item.text = s.lastUpdated && text ? `${icon} ${text}` : icon;
+
       const tip = new vscode.MarkdownString(undefined, true);
-      tip.appendMarkdown(`**LiteLLM** · ${s.host}\n\n`);
+      tip.appendMarkdown(`**LiteLLM** · ${s.accountLabel ?? s.host}\n\n`);
       if (s.error) { tip.appendMarkdown(`$(warning) ${s.error}\n\n`); }
       tip.appendMarkdown(`Today: **${money(s.today.spend)}** · ${tokens(s.today.total_tokens)} tokens · ${s.today.api_requests} requests\n\n`);
       tip.appendMarkdown(`Total spend: **${money(s.userInfo?.user_info?.spend ?? s.keyInfo?.spend ?? 0)}**`);
       const budget = s.keyInfo?.max_budget ?? s.userInfo?.user_info?.max_budget;
       if (budget) { tip.appendMarkdown(` / ${money(budget)}`); }
+      if (s.accounts.length > 1) {
+        tip.appendMarkdown('\n\n---\n\n');
+        for (const a of s.accounts) {
+          const value = a.error ? '$(warning)' : a.spend !== undefined ? money(a.spend) : '…';
+          tip.appendMarkdown(`${a.active ? '$(check)' : '$(blank)'} ${a.label}: ${value}\n\n`);
+        }
+      }
       tip.appendMarkdown('\n\n_Click to open the dashboard_');
       item.tooltip = tip;
     }
     broadcast(s);
   }
+}
+
+function emptyUsage() {
+  return {
+    keyInfo: undefined, userInfo: undefined, models: [] as string[], days: [], modelUsage: [],
+    totals: emptyMetrics(), today: emptyMetrics(), activityUnsupported: false,
+  };
+}
+
+function hostOf(account: Account): string {
+  return LiteLLMClient.normalize(account.baseUrl)?.host ?? account.baseUrl;
 }
 
 function dateBounds(range: Range): [string, string] {

@@ -2,7 +2,7 @@
   "name": "litellm-usage",
   "displayName": "LiteLLM Usage",
   "description": "Track your LiteLLM proxy spend, token and model usage from the VS Code status bar — no admin account required.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "mesutpiskin",
   "author": {
     "name": "Mesut Pişkin",
@@ -53,16 +53,27 @@
         "icon": "$(link-external)"
       },
       {
-        "command": "litellm.login",
-        "title": "Sign In",
+        "command": "litellm.switchAccount",
+        "title": "Switch Account",
         "category": "LiteLLM",
         "icon": "$(account)"
       },
       {
-        "command": "litellm.logout",
-        "title": "Sign Out",
+        "command": "litellm.addAccount",
+        "title": "Add Account",
         "category": "LiteLLM",
-        "icon": "$(sign-out)"
+        "icon": "$(add)"
+      },
+      {
+        "command": "litellm.renameAccount",
+        "title": "Rename Account",
+        "category": "LiteLLM"
+      },
+      {
+        "command": "litellm.removeAccount",
+        "title": "Remove Account",
+        "category": "LiteLLM",
+        "icon": "$(trash)"
       },
       {
         "command": "litellm.refresh",
@@ -97,30 +108,35 @@
           "group": "navigation@1"
         },
         {
-          "command": "litellm.showDashboard",
+          "command": "litellm.switchAccount",
           "when": "view == litellm.usageView",
           "group": "navigation@2"
         },
         {
-          "command": "litellm.login",
+          "command": "litellm.showDashboard",
+          "when": "view == litellm.usageView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "litellm.addAccount",
           "when": "view == litellm.usageView",
           "group": "account@1"
         },
         {
-          "command": "litellm.logout",
+          "command": "litellm.renameAccount",
           "when": "view == litellm.usageView",
           "group": "account@2"
+        },
+        {
+          "command": "litellm.removeAccount",
+          "when": "view == litellm.usageView",
+          "group": "account@3"
         }
       ]
     },
     "configuration": {
       "title": "LiteLLM Usage",
       "properties": {
-        "litellm.baseUrl": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Base URL of your LiteLLM proxy, e.g. `https://litellm.example.com`."
-        },
         "litellm.refreshMinutes": {
           "type": "number",
           "default": 5,

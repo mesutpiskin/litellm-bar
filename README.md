@@ -19,6 +19,7 @@ Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, t
   - Per-model breakdown
   - All keys that belong to you and their spend
   - Models available to your key
+- **Multiple accounts** — add as many proxies / keys as you like, switch between them from the sidebar, the dashboard or the status bar, and see every account's total spend side by side.
 - **Scope switch** — usage across all your keys, or just the key you signed in with.
 - **Secure** — credentials are kept in VS Code SecretStorage (macOS Keychain, Windows Credential Manager, libsecret on Linux).
 - **Enterprise friendly** — honours VS Code proxy settings and can trust self-signed certificates.
@@ -26,8 +27,8 @@ Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, t
 ## Getting started
 
 1. Install **LiteLLM Usage** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=mesutpiskin.litellm-usage) or [Open VSX](https://open-vsx.org/extension/mesutpiskin/litellm-usage) (Cursor, VSCodium, Windsurf…).
-2. Click **LiteLLM: Sign in** in the status bar, or run `LiteLLM: Sign In` from the Command Palette.
-3. Enter your proxy URL (e.g. `https://litellm.example.com`) and choose a sign-in method:
+2. Click **LiteLLM: Add account** in the status bar, or run `LiteLLM: Add Account` from the Command Palette.
+3. Enter your proxy URL (e.g. `https://litellm.example.com`), choose a sign-in method and give the account a name:
    - **API Key** — a virtual key created in the LiteLLM UI under *Virtual Keys*.
    - **Username / Password** — your LiteLLM UI credentials. If you choose to store the password, the session is renewed automatically when it expires. SSO logins are not supported; use an API key instead.
 4. Open the **LiteLLM** icon in the Activity Bar, or click the status bar item to open the full dashboard.
@@ -37,15 +38,16 @@ Keep an eye on your [LiteLLM](https://github.com/BerriAI/litellm) proxy spend, t
 | Command | Description |
 |---|---|
 | `LiteLLM: Show Usage Dashboard` | Open the dashboard |
-| `LiteLLM: Sign In` | Sign in or switch account |
-| `LiteLLM: Sign Out` | Remove stored credentials |
+| `LiteLLM: Add Account` | Add another proxy / key |
+| `LiteLLM: Switch Account` | Switch the active account |
+| `LiteLLM: Rename Account` | Rename an account |
+| `LiteLLM: Remove Account` | Remove an account and its stored credentials |
 | `LiteLLM: Refresh` | Refresh now |
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `litellm.baseUrl` | `""` | Base URL of your LiteLLM proxy |
 | `litellm.refreshMinutes` | `5` | Auto-refresh interval in minutes |
 | `litellm.statusBar` | `todaySpend` | `todaySpend`, `todayTokens`, `totalSpend` or `icon` |
 | `litellm.allowInsecureTLS` | `false` | Accept self-signed / untrusted certificates |

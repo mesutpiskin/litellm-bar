@@ -7,8 +7,10 @@ export interface DashboardHost {
   refresh(): Promise<void>;
   setRange(range: Range): Promise<void>;
   setScope(scope: Scope): Promise<void>;
-  login(): Promise<void>;
-  logout(): Promise<void>;
+  addAccount(): Promise<void>;
+  switchAccount(id?: string): Promise<void>;
+  renameAccount(id?: string): Promise<void>;
+  removeAccount(id?: string): Promise<void>;
   showDashboard(): void;
 }
 
@@ -28,8 +30,10 @@ function attach(webview: vscode.Webview, host: DashboardHost, compact: boolean):
       case 'refresh': void host.refresh(); break;
       case 'range': void host.setRange(msg.value); break;
       case 'scope': void host.setScope(msg.value); break;
-      case 'login': void host.login(); break;
-      case 'logout': void host.logout(); break;
+      case 'addAccount': void host.addAccount(); break;
+      case 'switchAccount': void host.switchAccount(msg.value); break;
+      case 'renameAccount': void host.renameAccount(msg.value); break;
+      case 'removeAccount': void host.removeAccount(msg.value); break;
       case 'open': host.showDashboard(); break;
     }
   });
@@ -117,6 +121,13 @@ function html(nonce: string, cspSource: string, compact: boolean): string {
   .model .row { gap: 4px; }
   .model code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
   .full { width: 100%; margin-top: 16px; }
+  .accountbar { margin: 8px 0 4px; }
+  select { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground);
+           border: 1px solid var(--vscode-dropdown-border, transparent); padding: 3px 6px; border-radius: 3px; font: inherit;
+           flex: 1; min-width: 0; max-width: 360px; }
+  .acct { padding: 8px 10px; border-radius: 6px; cursor: pointer; border: 1px solid var(--vscode-widget-border, #8883); margin-bottom: 6px; }
+  .acct:hover { background: var(--vscode-list-hoverBackground); }
+  .acct.active { border-color: var(--vscode-focusBorder); }
 </style>
 </head>
 <body class="${compact ? 'compact' : ''}">
@@ -138,7 +149,11 @@ document.addEventListener('click', e => {
   const t = e.target.closest('[data-action]'); if (!t) return;
   const a = t.dataset.action;
   if (a === 'chart') { chartMetric = t.dataset.value; render(); return; }
-  vscode.postMessage({ type: a, value: t.dataset.value && (isNaN(+t.dataset.value) ? t.dataset.value : +t.dataset.value) });
+  const v = t.dataset.value;
+  vscode.postMessage({ type: a, value: a === 'range' ? +v : v });
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'account') vscode.postMessage({ type: 'switchAccount', value: e.target.value });
 });
 vscode.postMessage({ type: 'ready' });
 
@@ -163,12 +178,25 @@ function chart(days) {
     + '<div class="card"><svg viewBox="0 0 ' + W + ' ' + H + '" width="100%">' + axis + bars + '</svg></div>';
 }
 
+function accountBar(s) {
+  const options = s.accounts.map(a => '<option value="' + esc(a.id) + '"' + (a.active ? ' selected' : '') + '>' + esc(a.label) + '</option>').join('');
+  const active = s.accounts.find(a => a.active);
+  return '<div class="row accountbar">'
+    + (s.accounts.length ? '<select id="account" title="Switch account">' + options + '</select>' : '')
+    + '<button data-action="addAccount" title="Add account">+ Add</button>'
+    + (active ? '<button data-action="renameAccount" data-value="' + esc(active.id) + '" title="Rename account">Rename</button>'
+      + '<button data-action="removeAccount" data-value="' + esc(active.id) + '" title="Remove account">Remove</button>' : '')
+    + '</div>';
+}
+
 function render() {
   const root = document.getElementById('root');
   const s = state;
   if (!s.configured) {
-    root.innerHTML = '<h1>LiteLLM Usage</h1><p class="muted">Sign in to see your spend, token and model usage.</p>'
-      + '<button class="primary" data-action="login">Sign In</button>';
+    root.innerHTML = '<h1>LiteLLM Usage</h1>'
+      + (s.accounts.length
+        ? '<p class="muted">Could not load the selected account.</p>' + accountBar(s) + (s.error ? '<div class="error">⚠ ' + esc(s.error) + '</div>' : '')
+        : '<p class="muted">Add a LiteLLM account to see your spend, token and model usage.</p><button class="primary" data-action="addAccount">Add account</button>');
     root.classList.remove('muted');
     return;
   }
@@ -182,11 +210,10 @@ function render() {
   const scopeBtn = (v, l) => '<button data-action="scope" data-value="' + v + '" class="' + (s.scope === v ? 'active' : '') + '">' + l + '</button>';
 
   let h = compact
-    ? '<div class="row"><strong>' + esc(ki.key_alias || ui?.user_email || 'LiteLLM') + '</strong><span class="spacer"></span>'
-      + (s.loading ? '<span class="muted">Refreshing…</span>' : '') + '</div><div class="muted">' + esc(s.host) + '</div>'
-    : '<div class="row"><h1>' + esc(ki.key_alias || ui?.user_email || 'LiteLLM') + '</h1><span class="muted">' + esc(s.host) + '</span>'
+    ? accountBar(s) + '<div class="muted">' + esc(s.host) + (s.loading ? ' · Refreshing…' : '') + '</div>'
+    : '<div class="row"><h1>' + esc(s.accountLabel || ki.key_alias || 'LiteLLM') + '</h1><span class="muted">' + esc(s.host) + '</span>'
       + '<span class="spacer"></span>' + (s.loading ? '<span class="muted">Refreshing…</span>' : '')
-      + '<button data-action="refresh">Refresh</button><button data-action="login">Switch account</button><button data-action="logout">Sign out</button></div>';
+      + '<button data-action="refresh">Refresh</button></div>' + accountBar(s);
   if (s.error) h += '<div class="error">⚠ ' + esc(s.error) + '</div>';
 
   h += '<h2>Budget</h2><div class="card"><div class="row"><span class="big">' + money(spend) + '</span>'
@@ -229,6 +256,13 @@ function render() {
           + '</td><td><div class="bar"><div style="width:' + (m.metrics.spend / maxSpend * 100).toFixed(1) + '%"></div></div></td></tr>').join('')
         + '</table>';
     }
+  }
+
+  if (s.accounts.length > 1) {
+    h += '<h2>Accounts</h2>' + s.accounts.map(a => '<div class="acct' + (a.active ? ' active' : '') + '" data-action="switchAccount" data-value="' + esc(a.id) + '">'
+      + '<div class="row"><strong>' + esc(a.label) + '</strong><span class="spacer"></span>'
+      + (a.error ? '<span class="error" style="margin:0" title="' + esc(a.error) + '">⚠</span>' : a.spend !== undefined ? '<span>' + money(a.spend) + (a.maxBudget ? ' <span class="muted">/ ' + money(a.maxBudget) + '</span>' : '') + '</span>' : '<span class="muted">…</span>')
+      + '</div><div class="muted">' + esc(a.host) + '</div></div>').join('');
   }
 
   const keys = s.userInfo?.keys ?? [];
