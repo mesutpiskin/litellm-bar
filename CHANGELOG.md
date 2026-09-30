@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- New README with a screenshot, getting-started guide and FAQ.
+
 ## 0.6.0
 
 - Browser sign-in (SSO): sign in with your proxy's identity provider (Google, Microsoft Entra ID, Okta, …) using LiteLLM's CLI SSO flow, including team selection and legacy proxies.
