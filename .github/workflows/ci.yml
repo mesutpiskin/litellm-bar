@@ -1,0 +1,15 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["Casks/**", "**.md"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app
+        run: ./scripts/build-app.sh "0.0.0-ci"
